@@ -6,336 +6,136 @@
 <title>Media Vault</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-  /* ── Variables ── */
   :root {
-    --bg:       #0c0c0f;
-    --surface:  #13131a;
-    --card:     #18181f;
-    --border:   #2a2a38;
-    --accent:   #e8c97e;
-    --accent2:  #7e9ee8;
-    --watched:  #5bba8a;
-    --text:     #e8e8f0;
-    --muted:    #6a6a80;
-    --danger:   #e87e7e;
-    --radius:   10px;
+    --bg:#0c0c0f; --surface:#13131a; --card:#18181f; --border:#2a2a38;
+    --accent:#e8c97e; --accent2:#7e9ee8; --watched:#5bba8a;
+    --text:#e8e8f0; --muted:#6a6a80; --radius:10px;
   }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; overflow-x:hidden; }
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* Auth */
+  #auth-screen { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:32px; background:radial-gradient(ellipse at 30% 40%,#1a1a2e 0%,var(--bg) 60%); }
+  #auth-screen h1 { font-family:'DM Serif Display',serif; font-size:clamp(42px,6vw,72px); letter-spacing:-1px; }
+  #auth-screen h1 em { color:var(--accent); font-style:italic; }
+  #auth-screen p { color:var(--muted); font-size:15px; }
+  #sign-in-btn { display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:14px 28px; border-radius:50px; font-size:15px; font-family:'DM Sans',sans-serif; cursor:pointer; transition:all .2s; }
+  #sign-in-btn:hover { background:var(--card); border-color:var(--accent); color:var(--accent); }
+  #sign-in-btn svg { width:20px; height:20px; }
 
-  body {
-    font-family: 'DM Sans', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+  /* App */
+  #app { display:none; flex-direction:column; height:100vh; }
 
-  /* ── Auth Screen ── */
-  #auth-screen {
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 32px;
-    background: radial-gradient(ellipse at 30% 40%, #1a1a2e 0%, var(--bg) 60%);
-  }
-  #auth-screen h1 {
-    font-family: 'DM Serif Display', serif;
-    font-size: clamp(42px, 6vw, 72px);
-    letter-spacing: -1px;
-    color: var(--text);
-  }
-  #auth-screen h1 em { color: var(--accent); font-style: italic; }
-  #auth-screen p { color: var(--muted); font-size: 15px; }
-  #sign-in-btn {
-    display: flex; align-items: center; gap: 10px;
-    background: var(--surface); border: 1px solid var(--border);
-    color: var(--text); padding: 14px 28px; border-radius: 50px;
-    font-size: 15px; font-family: 'DM Sans', sans-serif;
-    cursor: pointer; transition: all 0.2s;
-  }
-  #sign-in-btn:hover { background: var(--card); border-color: var(--accent); color: var(--accent); }
-  #sign-in-btn svg { width: 20px; height: 20px; }
+  /* Header */
+  #header { background:var(--surface); border-bottom:1px solid var(--border); padding:0 16px; display:flex; align-items:center; gap:10px; height:52px; flex-shrink:0; position:sticky; top:0; z-index:50; }
+  #header h1 { font-family:'DM Serif Display',serif; font-size:20px; color:var(--accent); white-space:nowrap; margin-right:4px; }
+  #filters { display:flex; flex-wrap:wrap; gap:6px; align-items:center; flex:1; }
+  .fg { display:flex; align-items:center; gap:4px; }
+  .fl { font-size:11px; color:var(--muted); white-space:nowrap; }
+  input[type=text],input[type=number],select { background:var(--card); border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:6px; font-size:12px; font-family:'DM Sans',sans-serif; outline:none; transition:border-color .15s; }
+  input[type=text]:focus,input[type=number]:focus,select:focus { border-color:var(--accent); }
+  input[type=text] { width:150px; }
+  input[type=number] { width:62px; }
+  select { min-width:105px; cursor:pointer; }
+  .type-toggle { display:flex; background:var(--card); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .type-btn { background:none; border:none; color:var(--muted); padding:4px 11px; font-size:12px; font-family:'DM Sans',sans-serif; cursor:pointer; transition:all .15s; white-space:nowrap; }
+  .type-btn.active { background:var(--accent); color:#0c0c0f; font-weight:500; }
+  #count { font-size:12px; color:var(--muted); white-space:nowrap; margin-left:auto; }
+  #user-avatar { width:28px; height:28px; border-radius:50%; background:var(--border); cursor:pointer; border:2px solid var(--border); transition:border-color .2s; }
+  #user-avatar:hover { border-color:var(--accent); }
 
-  /* ── App Shell ── */
-  #app { display: none; flex-direction: column; height: 100vh; }
+  /* Grid */
+  #grid { flex:1; overflow-y:auto; padding:14px 16px; display:grid; grid-template-columns:repeat(auto-fill,minmax(145px,1fr)); gap:14px; align-content:start; }
+  #grid::-webkit-scrollbar { width:5px; }
+  #grid::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
 
-  /* ── Header ── */
-  #header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 0 20px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    height: 56px;
-    flex-shrink: 0;
-    position: sticky; top: 0; z-index: 50;
-  }
-  #header h1 {
-    font-family: 'DM Serif Display', serif;
-    font-size: 22px;
-    color: var(--accent);
-    white-space: nowrap;
-    margin-right: 8px;
-  }
-
-  /* ── Filter Bar ── */
-  #filters {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1;
-  }
-  .filter-group { display: flex; align-items: center; gap: 5px; }
-  .filter-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
-
-  input[type=text], input[type=number], select {
-    background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 5px 9px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-family: 'DM Sans', sans-serif;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-  input[type=text]:focus, input[type=number]:focus, select:focus {
-    border-color: var(--accent);
-  }
-  input[type=text]  { width: 160px; }
-  input[type=number]{ width: 64px; }
-  select            { min-width: 110px; cursor: pointer; }
-
-  /* Type toggle */
-  .type-toggle { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  .type-btn {
-    background: none; border: none; color: var(--muted);
-    padding: 5px 12px; font-size: 12px; font-family: 'DM Sans', sans-serif;
-    cursor: pointer; transition: all 0.15s; white-space: nowrap;
-  }
-  .type-btn.active { background: var(--accent); color: #0c0c0f; font-weight: 500; }
-
-  /* Count & sort */
-  #count { font-size: 12px; color: var(--muted); white-space: nowrap; margin-left: auto; }
-  #user-avatar {
-    width: 30px; height: 30px; border-radius: 50%;
-    background: var(--border); cursor: pointer;
-    border: 2px solid var(--border); transition: border-color 0.2s;
-  }
-  #user-avatar:hover { border-color: var(--accent); }
-
-  /* ── Grid ── */
-  #grid {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px 20px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-    gap: 16px;
-    align-content: start;
-  }
-
-  /* ── Card ── */
-  .card {
-    background: var(--card);
-    border-radius: var(--radius);
-    overflow: visible;
-    position: relative;
-    transition: transform 0.2s, box-shadow 0.2s;
-    cursor: default;
-  }
-  .card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 32px rgba(0,0,0,0.5);
-    z-index: 2;
-  }
-
-  .poster-wrap {
-    position: relative;
-    border-radius: var(--radius) var(--radius) 0 0;
-    overflow: hidden;
-    aspect-ratio: 2/3;
-    background: var(--surface);
-  }
-  .poster-wrap img {
-    width: 100%; height: 100%; object-fit: cover; display: block;
-    transition: opacity 0.3s;
-  }
-  .poster-wrap img.loading { opacity: 0; }
-  .no-poster {
-    width: 100%; height: 100%;
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 8px;
-    color: var(--muted); font-size: 10px; text-align: center;
-    padding: 12px; line-height: 1.4;
-  }
-  .no-poster svg { opacity: 0.3; }
-
-  /* Badges */
-  .badge-wrap {
-    position: absolute; top: 6px; left: 6px;
-    display: flex; flex-direction: column; gap: 3px;
-  }
-  .badge {
-    font-size: 9px; font-weight: 500; padding: 2px 6px;
-    border-radius: 4px; backdrop-filter: blur(6px);
-    white-space: nowrap; width: fit-content;
-  }
-  .badge-watched  { background: rgba(91,186,138,0.85); color: #001a0a; }
-  .badge-collect  { background: rgba(232,201,126,0.85); color: #1a1000; }
-  .badge-tv       { background: rgba(126,158,232,0.85); color: #000d1a; }
+  /* Card */
+  .card { background:var(--card); border-radius:var(--radius); overflow:visible; position:relative; transition:transform .2s,box-shadow .2s; }
+  .card:hover { transform:translateY(-4px); box-shadow:0 12px 32px rgba(0,0,0,.5); z-index:2; }
+  .poster-wrap { position:relative; border-radius:var(--radius) var(--radius) 0 0; overflow:hidden; aspect-ratio:2/3; background:var(--surface); }
+  .poster-wrap img { width:100%; height:100%; object-fit:cover; display:block; transition:opacity .3s; }
+  .poster-wrap img.loading { opacity:0; }
+  .no-poster { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--muted); font-size:10px; text-align:center; padding:12px; line-height:1.4; }
+  .no-poster svg { opacity:.3; }
 
   /* Rating pill */
-  .rating-pill {
-    position: absolute; top: 6px; right: 6px;
-    background: rgba(12,12,15,0.85); backdrop-filter: blur(6px);
-    border: 1px solid var(--border);
-    border-radius: 20px; padding: 2px 7px;
-    font-size: 11px; font-weight: 500; color: var(--accent);
-    cursor: pointer; transition: background 0.15s;
-  }
-  .rating-pill:hover { background: rgba(232,201,126,0.15); }
-  .rating-pill.empty { color: var(--muted); }
+  .rating-pill { position:absolute; top:6px; right:6px; background:rgba(12,12,15,.85); backdrop-filter:blur(6px); border:1px solid var(--border); border-radius:20px; padding:2px 7px; font-size:11px; font-weight:500; color:var(--accent); cursor:pointer; transition:background .15s; z-index:3; }
+  .rating-pill:hover { background:rgba(232,201,126,.15); }
+  .rating-pill.empty { color:var(--muted); }
+
+  /* Change poster btn */
+  .change-poster-btn { position:absolute; bottom:6px; right:6px; background:rgba(12,12,15,.8); backdrop-filter:blur(4px); border:1px solid var(--border); border-radius:6px; color:var(--muted); font-size:10px; padding:3px 6px; cursor:pointer; opacity:0; transition:opacity .2s; z-index:3; white-space:nowrap; }
+  .poster-wrap:hover .change-poster-btn { opacity:1; }
+  .change-poster-btn:hover { color:var(--accent); border-color:var(--accent); }
 
   /* Card info */
-  .card-info { padding: 7px 8px 5px; }
-  .card-title {
-    font-size: 11px; font-weight: 500; color: var(--text);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    line-height: 1.3;
-  }
-  .card-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .card-info { padding:6px 8px 4px; }
+  .card-title { font-size:11px; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.3; }
+  .card-meta { font-size:10px; color:var(--muted); margin-top:2px; }
 
-  /* Action row */
-  .card-actions {
-    display: flex; align-items: center; padding: 4px 6px 8px;
-    gap: 5px; position: relative;
-  }
-  .act {
-    width: 26px; height: 26px; border-radius: 50%; border: none;
-    cursor: pointer; display: flex; align-items: center; justify-content: center;
-    font-size: 13px; transition: transform 0.12s, background 0.15s;
-    flex-shrink: 0;
-  }
-  .act:hover { transform: scale(1.2); }
-  .act-watch { background: var(--surface); color: var(--muted); }
-  .act-watch.on { background: rgba(91,186,138,0.2); color: var(--watched); }
-  .act-collect { background: var(--surface); color: var(--muted); }
-  .act-collect.on { background: rgba(232,201,126,0.2); color: var(--accent); }
-  .act-list { background: var(--surface); color: var(--muted); }
-  .act-list:hover { background: rgba(126,158,232,0.15); color: var(--accent2); }
+  /* Actions */
+  .card-actions { display:flex; align-items:center; padding:3px 6px 7px; gap:4px; position:relative; }
+  .act { width:26px; height:26px; border-radius:50%; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; transition:transform .12s,background .15s; flex-shrink:0; }
+  .act:hover { transform:scale(1.2); }
+  .act-watch   { background:var(--surface); color:var(--muted); }
+  .act-watch.on { background:rgba(91,186,138,.2); color:var(--watched); }
+  .act-collect { background:var(--surface); color:var(--muted); }
+  .act-collect.on { background:rgba(232,201,126,.2); color:var(--accent); }
+  .act-list    { background:var(--surface); color:var(--muted); }
+  .act-list:hover { background:rgba(126,158,232,.15); color:var(--accent2); }
 
-  /* ── Popups ── */
-  .popup {
-    position: absolute; bottom: 36px;
-    background: #1e1e28; border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 10px;
-    z-index: 100; display: none; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-  }
-  .popup.vis { display: block; }
+  /* Popups */
+  .popup { position:absolute; bottom:36px; background:#1e1e28; border:1px solid var(--border); border-radius:var(--radius); padding:10px; z-index:100; display:none; box-shadow:0 8px 32px rgba(0,0,0,.6); }
+  .popup.vis { display:block; }
+  .popup h5 { font-size:10px; color:var(--muted); margin-bottom:6px; font-weight:400; text-transform:uppercase; letter-spacing:.5px; }
 
   /* Rating popup */
-  .rpop { left: auto; right: 0; width: 130px; bottom: 32px; }
-  .rpop-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 4px; }
-  .rpop-grid button {
-    background: var(--surface); border: 1px solid var(--border);
-    color: var(--text); border-radius: 5px; padding: 4px 0;
-    font-size: 12px; cursor: pointer; font-family: 'DM Sans', sans-serif;
-    transition: all 0.1s;
-  }
-  .rpop-grid button:hover { background: var(--accent); color: #0c0c0f; border-color: var(--accent); }
-  .rpop-grid button.selected { background: var(--accent); color: #0c0c0f; border-color: var(--accent); }
-  .rpop h5 { font-size: 10px; color: var(--muted); margin-bottom: 6px; font-weight: 400; }
+  .rpop { right:0; bottom:30px; width:130px; }
+  .rpop-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:4px; }
+  .rpop-grid button { background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:5px; padding:4px 0; font-size:12px; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .1s; }
+  .rpop-grid button:hover,.rpop-grid button.selected { background:var(--accent); color:#0c0c0f; border-color:var(--accent); }
 
   /* List popup */
-  .lpop { left: 0; min-width: 180px; }
-  .lpop h5 { font-size: 10px; color: var(--muted); margin-bottom: 6px; font-weight: 400; text-transform: uppercase; letter-spacing: 0.5px; }
-  .list-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 5px 4px; border-radius: 5px; cursor: pointer;
-    font-size: 12px; transition: background 0.1s;
-  }
-  .list-item:hover { background: var(--surface); }
-  .list-item input[type=checkbox] { accent-color: var(--accent2); cursor: pointer; width: 13px; height: 13px; }
+  .lpop { left:0; min-width:180px; }
+  .list-item { display:flex; align-items:center; gap:8px; padding:5px 4px; border-radius:5px; cursor:pointer; font-size:12px; transition:background .1s; }
+  .list-item:hover { background:var(--surface); }
+  .list-item input[type=checkbox] { accent-color:var(--accent2); cursor:pointer; width:13px; height:13px; }
 
-  /* ── Date Modal ── */
-  #date-modal {
-    display: none; position: fixed; inset: 0;
-    background: rgba(0,0,0,0.8); backdrop-filter: blur(4px);
-    z-index: 200; align-items: center; justify-content: center;
-  }
-  #date-modal.vis { display: flex; }
-  #date-modal-box {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 14px; padding: 28px; width: 300px; text-align: center;
-  }
-  #date-modal-box h3 {
-    font-family: 'DM Serif Display', serif;
-    font-size: 18px; margin-bottom: 6px;
-  }
-  #date-modal-box p { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
-  #date-input {
-    width: 100%; padding: 8px 12px;
-    background: var(--card); border: 1px solid var(--border);
-    color: var(--text); border-radius: 8px; font-size: 14px;
-    font-family: 'DM Sans', sans-serif;
-  }
-  .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
-  .modal-btn {
-    flex: 1; padding: 9px; border: none; border-radius: 8px;
-    font-size: 13px; font-family: 'DM Sans', sans-serif; cursor: pointer;
-    transition: opacity 0.15s;
-  }
-  .modal-btn:hover { opacity: 0.85; }
-  .btn-confirm { background: var(--accent); color: #0c0c0f; font-weight: 500; }
-  .btn-cancel  { background: var(--card); color: var(--muted); border: 1px solid var(--border); }
+  /* Poster picker popup */
+  .ppop { left:0; right:0; bottom:auto; top:6px; width:auto; max-height:340px; overflow-y:auto; }
+  .ppop-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .ppop-grid img { width:100%; aspect-ratio:2/3; object-fit:cover; border-radius:5px; cursor:pointer; border:2px solid transparent; transition:border-color .15s; }
+  .ppop-grid img:hover,.ppop-grid img.selected { border-color:var(--accent); }
+  .ppop-loading { color:var(--muted); font-size:12px; text-align:center; padding:20px 0; }
 
-  /* ── Loading / Empty states ── */
-  #loading-state, #empty-state {
-    grid-column: 1 / -1;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    padding: 80px 20px; gap: 12px; color: var(--muted);
-  }
-  .spinner {
-    width: 36px; height: 36px;
-    border: 3px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  #loading-state p, #empty-state p { font-size: 14px; }
+  /* Modals */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.8); backdrop-filter:blur(4px); z-index:200; align-items:center; justify-content:center; }
+  .modal-overlay.vis { display:flex; }
+  .modal-box { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:26px; width:300px; text-align:center; }
+  .modal-box h3 { font-family:'DM Serif Display',serif; font-size:18px; margin-bottom:6px; }
+  .modal-box p { font-size:12px; color:var(--muted); margin-bottom:16px; }
+  .modal-input { width:100%; padding:8px 12px; background:var(--card); border:1px solid var(--border); color:var(--text); border-radius:8px; font-size:14px; font-family:'DM Sans',sans-serif; outline:none; }
+  .modal-actions { display:flex; gap:8px; margin-top:16px; }
+  .modal-btn { flex:1; padding:9px; border:none; border-radius:8px; font-size:13px; font-family:'DM Sans',sans-serif; cursor:pointer; }
+  .btn-confirm { background:var(--accent); color:#0c0c0f; font-weight:500; }
+  .btn-cancel  { background:var(--card); color:var(--muted); border:1px solid var(--border); }
 
-  /* Scrollbar */
-  #grid::-webkit-scrollbar { width: 6px; }
-  #grid::-webkit-scrollbar-track { background: transparent; }
-  #grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-  /* Responsive tweaks */
-  @media (max-width: 700px) {
-    #header { flex-wrap: wrap; height: auto; padding: 10px; }
-    #filters { gap: 6px; }
-    input[type=text] { width: 120px; }
-  }
+  /* Loading/empty */
+  #loading-state,#empty-state { grid-column:1/-1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 20px; gap:12px; color:var(--muted); }
+  .spinner { width:36px; height:36px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
 
-<!-- Auth Screen -->
+<!-- Auth -->
 <div id="auth-screen">
   <div style="text-align:center">
     <h1>Media <em>Vault</em></h1>
     <p style="margin-top:8px">Your personal film &amp; television archive</p>
   </div>
   <button id="sign-in-btn" onclick="signIn()">
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
-      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-    </svg>
+    <svg viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
     Sign in with Google
   </button>
   <p id="auth-error" style="color:#e87e7e;display:none;font-size:13px"></p>
@@ -351,55 +151,52 @@
         <button class="type-btn"        id="tb-movies" onclick="setType('movie')">Movies</button>
         <button class="type-btn"        id="tb-tv"     onclick="setType('tv')">TV</button>
       </div>
-      <div class="filter-group">
-        <input type="text" id="f-search" placeholder="Search titles…" oninput="applyFilters()">
-      </div>
-      <div class="filter-group">
-        <span class="filter-label">Watched</span>
+      <div class="fg"><input type="text" id="f-search" placeholder="Search titles…" oninput="applyFilters()"></div>
+      <div class="fg">
+        <span class="fl">Watched</span>
         <select id="f-watched" onchange="applyFilters()">
-          <option value="">All</option>
-          <option value="yes">Watched</option>
-          <option value="no">Unwatched</option>
+          <option value="">All</option><option value="yes">Watched</option>
+          <option value="no">Unwatched</option><option value="null">— Hide —</option>
         </select>
       </div>
-      <div class="filter-group">
-        <span class="filter-label">Collection</span>
+      <div class="fg">
+        <span class="fl">Collection</span>
         <select id="f-collect" onchange="applyFilters()">
-          <option value="">All</option>
-          <option value="yes">Collected</option>
-          <option value="no">Not collected</option>
+          <option value="">All</option><option value="yes">Collected</option>
+          <option value="no">Not collected</option><option value="null">— Hide —</option>
         </select>
       </div>
-      <div class="filter-group">
-        <span class="filter-label">List</span>
+      <div class="fg">
+        <span class="fl">List</span>
         <select id="f-list" onchange="applyFilters()">
           <option value="">Any</option>
           <option value="watchlist">Watchlist</option>
           <option value="list1001">1001 List</option>
           <option value="list1001d">1001 w/Deletions</option>
           <option value="holly">Watch with Holly</option>
+          <option value="none">— Not on any list —</option>
         </select>
       </div>
-      <div class="filter-group">
-        <span class="filter-label">Year</span>
+      <div class="fg">
+        <span class="fl">Year</span>
         <input type="number" id="f-y1" placeholder="From" oninput="applyFilters()">
         <input type="number" id="f-y2" placeholder="To"   oninput="applyFilters()">
       </div>
-      <div class="filter-group">
-        <span class="filter-label">Rating</span>
+      <div class="fg">
+        <span class="fl">Rating</span>
         <input type="number" id="f-r1" placeholder="Min" min="1" max="10" oninput="applyFilters()">
         <input type="number" id="f-r2" placeholder="Max" min="1" max="10" oninput="applyFilters()">
       </div>
-      <div class="filter-group">
-        <span class="filter-label">Country</span>
+      <div class="fg">
+        <span class="fl">Country</span>
         <select id="f-country" onchange="applyFilters()"><option value="">All</option></select>
       </div>
-      <div class="filter-group">
-        <span class="filter-label">Language</span>
+      <div class="fg">
+        <span class="fl">Language</span>
         <select id="f-lang" onchange="applyFilters()"><option value="">All</option></select>
       </div>
-      <div class="filter-group">
-        <span class="filter-label">Sort</span>
+      <div class="fg">
+        <span class="fl">Sort</span>
         <select id="f-sort" onchange="applyFilters()">
           <option value="title-asc">Title A→Z</option>
           <option value="title-desc">Title Z→A</option>
@@ -407,27 +204,22 @@
           <option value="year-asc">Year (oldest)</option>
           <option value="rating-desc">Rating ↓</option>
           <option value="rating-asc">Rating ↑</option>
+          <option value="random">Random</option>
         </select>
       </div>
       <span id="count"></span>
     </div>
     <img id="user-avatar" title="Signed in" alt="User">
   </div>
-
-  <div id="grid">
-    <div id="loading-state">
-      <div class="spinner"></div>
-      <p>Loading your library…</p>
-    </div>
-  </div>
+  <div id="grid"><div id="loading-state"><div class="spinner"></div><p>Loading your library…</p></div></div>
 </div>
 
 <!-- Date modal -->
-<div id="date-modal">
-  <div id="date-modal-box">
-    <h3>When did you watch this?</h3>
+<div class="modal-overlay" id="date-modal">
+  <div class="modal-box">
+    <h3>Log a watch</h3>
     <p id="date-modal-title"></p>
-    <input type="date" id="date-input">
+    <input type="date" id="date-input" class="modal-input">
     <div class="modal-actions">
       <button class="modal-btn btn-confirm" onclick="confirmWatch()">Save</button>
       <button class="modal-btn btn-cancel"  onclick="cancelWatch()">Cancel</button>
@@ -436,23 +228,28 @@
 </div>
 
 <script>
-// ── Config ──────────────────────────────────────────────────
-const CLIENT_ID  = '740123788552-hb48rl4ejh63q7eitpn283genf2fj3tv.apps.googleusercontent.com';
-const SHEET_ID   = '1Zg422K-n3zb4RmDsVU90N9h2dYuOvdOIeoMLuFhWUos';
-const SCOPES     = 'https://www.googleapis.com/auth/spreadsheets';
+// ── Config ───────────────────────────────────────────────────
+const CLIENT_ID = '740123788552-hb48rl4ejh63q7eitpn283genf2fj3tv.apps.googleusercontent.com';
+const SHEET_ID  = '1Zg422K-n3zb4RmDsVU90N9h2dYuOvdOIeoMLuFhWUos';
+const SCOPES    = 'https://www.googleapis.com/auth/spreadsheets';
+const TMDB_KEY  = 'a746e092fa14f46f1abdbca19e11d8b7';
 
-// ── Column maps (1-based → 0-based index) ───────────────────
-const MC = { TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,POSTER:15,TMDB_ID:16,IMDB_ID:17 };
-const TC = { TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,SEASONS:15,POSTER:16,TMDB_ID:17,IMDB_ID:18 };
+// ── Column maps (0-based) ────────────────────────────────────
+const MC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,POSTER:15,TMDB_ID:16,IMDB_ID:17};
+const TC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,SEASONS:15,POSTER:16,TMDB_ID:17,IMDB_ID:18};
+
+// Formatting constants matching the spreadsheet
+const FMT_CENTER = { horizontalAlignment: 'CENTER' };
+const FMT_LIST_YES = { backgroundColor: { red:0.839, green:0.894, blue:0.969 }, horizontalAlignment:'CENTER' };
 
 // ── State ────────────────────────────────────────────────────
 let tokenClient, accessToken;
 let allItems = [], filtered = [];
-let curType = 'all';
+let curType  = 'all';
 let pendingWatch = null;
-let openPopup = null;
+let openPopup    = null;
 
-// ── Google Identity ──────────────────────────────────────────
+// ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
   const s = document.createElement('script');
   s.src = 'https://accounts.google.com/gsi/client';
@@ -466,6 +263,14 @@ function initGIS() {
     scope: SCOPES,
     callback: onToken,
   });
+
+  // Try to restore saved token
+  const saved = sessionStorage.getItem('mv_token');
+  const expiry = parseInt(sessionStorage.getItem('mv_token_expiry') || '0');
+  if (saved && Date.now() < expiry) {
+    accessToken = saved;
+    showApp();
+  }
 }
 
 function signIn() { tokenClient.requestAccessToken(); }
@@ -477,6 +282,13 @@ function onToken(resp) {
     return;
   }
   accessToken = resp.access_token;
+  // Store token for the session + 55 min (tokens last ~1hr)
+  sessionStorage.setItem('mv_token', accessToken);
+  sessionStorage.setItem('mv_token_expiry', Date.now() + 55 * 60 * 1000);
+  showApp();
+}
+
+function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   loadUserAvatar();
@@ -488,20 +300,19 @@ function loadUserAvatar() {
     headers: { Authorization: 'Bearer ' + accessToken }
   }).then(r => r.json()).then(u => {
     if (u.picture) document.getElementById('user-avatar').src = u.picture;
-  });
+  }).catch(() => {});
 }
 
-// ── Sheet Data ───────────────────────────────────────────────
+// ── Sheet Read ───────────────────────────────────────────────
 async function loadSheetData() {
   showLoading(true);
   try {
     const [movies, shows] = await Promise.all([
-      fetchSheet('Movies'),
-      fetchSheet('TV Shows'),
+      fetchSheet('Movies'), fetchSheet('TV Shows'),
     ]);
     allItems = [
-      ...movies.slice(1).filter(r => r[0]).map((r, i) => rowToItem(r, MC, 'movie', i + 2)),
-      ...shows.slice(1).filter(r => r[0]).map((r, i) => rowToItem(r, TC, 'tv', i + 2)),
+      ...movies.slice(1).filter(r => r[0]).map((r,i) => rowToItem(r, MC, 'movie', i+2)),
+      ...shows.slice(1).filter(r => r[0]).map((r,i) => rowToItem(r, TC, 'tv',    i+2)),
     ];
     populateDropdowns();
     applyFilters();
@@ -511,36 +322,35 @@ async function loadSheetData() {
   }
 }
 
-async function fetchSheet(sheetName) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(sheetName)}`;
-  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + accessToken } });
-  const data = await r.json();
-  return data.values || [];
+async function fetchSheet(name) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(name)}`;
+  const r   = await fetch(url, { headers:{ Authorization:'Bearer '+accessToken } });
+  const d   = await r.json();
+  return d.values || [];
 }
 
 function rowToItem(row, cols, type, rowNum) {
   return {
-    _row: rowNum, _type: type,
-    _sheet: type === 'movie' ? 'Movies' : 'TV Shows',
-    _cols: cols,
-    title:      row[cols.TITLE]      || '',
-    year:       row[cols.YEAR]       || '',
-    rating:     row[cols.RATING]     || '',
-    watched:    row[cols.WATCHED]    || '',
-    lastWatched:row[cols.LAST_WATCHED]|| '',
-    times:      row[cols.TIMES]      || '',
-    release:    row[cols.RELEASE]    || '',
-    runtime:    row[cols.RUNTIME]    || '',
-    country:    row[cols.COUNTRY]    || '',
-    language:   row[cols.LANGUAGE]   || '',
-    watchlist:  row[cols.WATCHLIST]  || '',
-    list1001:   row[cols.LIST_1001]  || '',
-    list1001d:  row[cols.LIST_1001_D]|| '',
-    holly:      row[cols.HOLLY]      || '',
-    collection: row[cols.COLLECTION] || '',
-    seasons:    type === 'tv' ? (row[cols.SEASONS] || '') : '',
-    poster:     row[cols.POSTER]     || '',
-    tmdbId:     row[cols.TMDB_ID]    || '',
+    _row:rowNum, _type:type,
+    _sheet: type==='movie' ? 'Movies' : 'TV Shows',
+    title:      row[cols.TITLE]       ||'',
+    year:       row[cols.YEAR]        ||'',
+    rating:     row[cols.RATING]      ||'',
+    watched:    row[cols.WATCHED]     ||'',
+    lastWatched:row[cols.LAST_WATCHED]||'',
+    times:      row[cols.TIMES]       ||'',
+    release:    row[cols.RELEASE]     ||'',
+    runtime:    row[cols.RUNTIME]     ||'',
+    country:    row[cols.COUNTRY]     ||'',
+    language:   row[cols.LANGUAGE]    ||'',
+    watchlist:  row[cols.WATCHLIST]   ||'',
+    list1001:   row[cols.LIST_1001]   ||'',
+    list1001d:  row[cols.LIST_1001_D] ||'',
+    holly:      row[cols.HOLLY]       ||'',
+    collection: row[cols.COLLECTION]  ||'',
+    seasons:    type==='tv' ? (row[cols.SEASONS]||'') : '',
+    poster:     row[cols.POSTER]      ||'',
+    tmdbId:     row[cols.TMDB_ID]     ||'',
   };
 }
 
@@ -550,64 +360,69 @@ function showLoading(show) {
 }
 
 // ── Sheet Write ──────────────────────────────────────────────
-async function updateCell(item, colKey, value) {
-  const cols   = item._type === 'movie' ? MC : TC;
-  const colIdx = cols[colKey];
-  const colLetter = colIndexToLetter(colIdx);
-  const range  = `${item._sheet}!${colLetter}${item._row}`;
-  await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
-    {
-      method: 'PUT',
-      headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ values: [[value]] }),
-    }
-  );
-  item[colKey.toLowerCase()] = value;
-}
-
 async function updateCells(item, updates) {
-  const cols = item._type === 'movie' ? MC : TC;
+  const cols = item._type==='movie' ? MC : TC;
   const data = updates.map(u => ({
-    range: `${item._sheet}!${colIndexToLetter(cols[u.col])}${item._row}`,
+    range: `${item._sheet}!${colLetter(cols[u.col])}${item._row}`,
     values: [[u.val]],
   }));
   await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
-    {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ valueInputOption: 'RAW', data }),
-    }
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+      body: JSON.stringify({ valueInputOption:'RAW', data }) }
   );
 }
 
-function colIndexToLetter(idx) {
-  let letter = '';
-  let n = idx + 1;
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    letter = String.fromCharCode(65 + rem) + letter;
-    n = Math.floor((n - 1) / 26);
-  }
-  return letter;
+// Apply formatting to specific cells via Sheets batchUpdate (spreadsheets API)
+async function applyFormatting(item, colKey, fmt) {
+  const cols   = item._type==='movie' ? MC : TC;
+  const colIdx = cols[colKey];
+  const rowIdx = item._row - 1; // 0-based
+  const sheetId = item._type==='movie' ? 0 : 1; // we'll look this up properly below
+
+  // Fetch sheet metadata to get correct sheetId
+  const meta = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=sheets.properties`,
+    { headers:{ Authorization:'Bearer '+accessToken } }
+  ).then(r=>r.json());
+
+  const sheetProps = meta.sheets.find(s => s.properties.title === item._sheet);
+  if (!sheetProps) return;
+  const sid = sheetProps.properties.sheetId;
+
+  const req = {
+    repeatCell: {
+      range: { sheetId:sid, startRowIndex:rowIdx, endRowIndex:rowIdx+1, startColumnIndex:colIdx, endColumnIndex:colIdx+1 },
+      cell: { userEnteredFormat: fmt },
+      fields: 'userEnteredFormat(backgroundColor,horizontalAlignment)',
+    }
+  };
+
+  await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+      body: JSON.stringify({ requests:[req] }) }
+  );
 }
 
-// ── Filters & Sort ───────────────────────────────────────────
+function colLetter(idx) {
+  let l='', n=idx+1;
+  while(n>0){ l=String.fromCharCode(65+(n-1)%26)+l; n=Math.floor((n-1)/26); }
+  return l;
+}
+
+// ── Filters ──────────────────────────────────────────────────
 function populateDropdowns() {
-  const countries = [...new Set(allItems.map(i => i.country).filter(Boolean))].sort();
-  const langs     = [...new Set(allItems.map(i => i.language).filter(Boolean))].sort();
-  const cSel = document.getElementById('f-country');
-  const lSel = document.getElementById('f-lang');
-  countries.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; cSel.appendChild(o); });
-  langs.forEach(l => { const o = document.createElement('option'); o.value = l; o.textContent = l; lSel.appendChild(o); });
+  const cos = [...new Set(allItems.map(i=>i.country).filter(Boolean))].sort();
+  const las = [...new Set(allItems.map(i=>i.language).filter(Boolean))].sort();
+  const cSel=document.getElementById('f-country'), lSel=document.getElementById('f-lang');
+  cos.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;cSel.appendChild(o);});
+  las.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;lSel.appendChild(o);});
 }
 
 function setType(t) {
-  curType = t;
-  ['all','movies','tv'].forEach(id => {
-    document.getElementById('tb-' + id).classList.toggle('active', id === t);
-  });
+  curType=t;
+  ['all','movies','tv'].forEach(id=>document.getElementById('tb-'+id).classList.toggle('active',id===t));
   applyFilters();
 }
 
@@ -616,282 +431,284 @@ function applyFilters() {
   const fw  = document.getElementById('f-watched').value;
   const fc  = document.getElementById('f-collect').value;
   const fl  = document.getElementById('f-list').value;
-  const fy1 = parseInt(document.getElementById('f-y1').value) || 0;
-  const fy2 = parseInt(document.getElementById('f-y2').value) || 9999;
-  const fr1 = parseFloat(document.getElementById('f-r1').value) || 0;
-  const fr2 = parseFloat(document.getElementById('f-r2').value) || 10;
+  const fy1 = parseInt(document.getElementById('f-y1').value)||0;
+  const fy2 = parseInt(document.getElementById('f-y2').value)||9999;
+  const fr1 = parseFloat(document.getElementById('f-r1').value)||0;
+  const fr2 = parseFloat(document.getElementById('f-r2').value)||10;
   const fco = document.getElementById('f-country').value;
   const fla = document.getElementById('f-lang').value;
   const srt = document.getElementById('f-sort').value;
 
   filtered = allItems.filter(i => {
-    if (curType !== 'all' && i._type !== curType) return false;
+    if (curType!=='all' && i._type!==curType) return false;
     if (s && !i.title.toLowerCase().includes(s)) return false;
-    const w = i.watched.toLowerCase();
-    if (fw === 'yes' && w !== 'yes') return false;
-    if (fw === 'no'  && w === 'yes') return false;
-    const col = i.collection.toLowerCase();
-    if (fc === 'yes' && col !== 'yes') return false;
-    if (fc === 'no'  && col === 'yes') return false;
-    if (fl === 'watchlist' && i.watchlist.toLowerCase()  !== 'yes') return false;
-    if (fl === 'list1001'  && i.list1001.toLowerCase()   !== 'yes') return false;
-    if (fl === 'list1001d' && i.list1001d.toLowerCase()  !== 'yes') return false;
-    if (fl === 'holly'     && i.holly.toLowerCase()      !== 'yes') return false;
-    const yr = parseInt(i.year) || 0;
-    if (yr && (yr < fy1 || yr > fy2)) return false;
-    const rt = parseFloat(i.rating) || 0;
-    if (i.rating && (rt < fr1 || rt > fr2)) return false;
-    if (fco && i.country   !== fco) return false;
-    if (fla && i.language  !== fla) return false;
+
+    const w = i.watched.toLowerCase()==='yes';
+    if (fw==='yes'  && !w) return false;
+    if (fw==='no'   && w)  return false;
+    if (fw==='null' && w)  return false; // hide watched
+
+    const col = i.collection.toLowerCase()==='yes';
+    if (fc==='yes'  && !col) return false;
+    if (fc==='no'   && col)  return false;
+    if (fc==='null' && col)  return false; // hide collected
+
+    const onAny = i.watchlist.toLowerCase()==='yes' || i.list1001.toLowerCase()==='yes' ||
+                  i.list1001d.toLowerCase()==='yes' || i.holly.toLowerCase()==='yes';
+    if (fl==='watchlist' && i.watchlist.toLowerCase()!=='yes') return false;
+    if (fl==='list1001'  && i.list1001.toLowerCase()!=='yes')  return false;
+    if (fl==='list1001d' && i.list1001d.toLowerCase()!=='yes') return false;
+    if (fl==='holly'     && i.holly.toLowerCase()!=='yes')     return false;
+    if (fl==='none'      && onAny) return false;
+
+    const yr=parseInt(i.year)||0;
+    if (yr && (yr<fy1||yr>fy2)) return false;
+    const rt=parseFloat(i.rating)||0;
+    if (i.rating&&(rt<fr1||rt>fr2)) return false;
+    if (fco && i.country!==fco) return false;
+    if (fla && i.language!==fla) return false;
     return true;
   });
 
-  filtered.sort((a, b) => {
-    if (srt === 'title-asc')   return a.title.localeCompare(b.title);
-    if (srt === 'title-desc')  return b.title.localeCompare(a.title);
-    if (srt === 'year-desc')   return (parseInt(b.year)||0) - (parseInt(a.year)||0);
-    if (srt === 'year-asc')    return (parseInt(a.year)||0) - (parseInt(b.year)||0);
-    if (srt === 'rating-desc') return (parseFloat(b.rating)||0) - (parseFloat(a.rating)||0);
-    if (srt === 'rating-asc')  return (parseFloat(a.rating)||0) - (parseFloat(b.rating)||0);
-    return 0;
-  });
+  if (srt==='random') {
+    for (let i=filtered.length-1;i>0;i--) {
+      const j=Math.floor(Math.random()*(i+1));
+      [filtered[i],filtered[j]]=[filtered[j],filtered[i]];
+    }
+  } else {
+    filtered.sort((a,b)=>{
+      if (srt==='title-asc')   return a.title.localeCompare(b.title);
+      if (srt==='title-desc')  return b.title.localeCompare(a.title);
+      if (srt==='year-desc')   return (parseInt(b.year)||0)-(parseInt(a.year)||0);
+      if (srt==='year-asc')    return (parseInt(a.year)||0)-(parseInt(b.year)||0);
+      if (srt==='rating-desc') return (parseFloat(b.rating)||0)-(parseFloat(a.rating)||0);
+      if (srt==='rating-asc')  return (parseFloat(a.rating)||0)-(parseFloat(b.rating)||0);
+      return 0;
+    });
+  }
 
-  document.getElementById('count').textContent = filtered.length.toLocaleString() + ' titles';
+  document.getElementById('count').textContent = filtered.length.toLocaleString()+' titles';
   renderGrid();
 }
 
 // ── Render ───────────────────────────────────────────────────
 function renderGrid() {
-  const grid = document.getElementById('grid');
-  grid.innerHTML = '';
-
+  const grid=document.getElementById('grid');
+  grid.innerHTML='';
   if (!filtered.length) {
-    const empty = document.createElement('div');
-    empty.id = 'empty-state';
-    empty.innerHTML = '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><p>No titles match your filters</p>';
-    grid.appendChild(empty);
-    return;
+    const e=document.createElement('div'); e.id='empty-state';
+    e.innerHTML='<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><p>No titles match your filters</p>';
+    grid.appendChild(e); return;
   }
-
-  const frag = document.createDocumentFragment();
-  filtered.forEach(item => frag.appendChild(makeCard(item)));
+  const frag=document.createDocumentFragment();
+  filtered.forEach(item=>frag.appendChild(makeCard(item)));
   grid.appendChild(frag);
 }
 
 function makeCard(item) {
-  const card = document.createElement('div');
-  card.className = 'card';
+  const card=document.createElement('div'); card.className='card';
+  const isW=item.watched.toLowerCase()==='yes';
+  const isC=item.collection.toLowerCase()==='yes';
 
-  const isWatched = item.watched.toLowerCase() === 'yes';
-  const isCollect = item.collection.toLowerCase() === 'yes';
-
-  // Poster
-  const pw = document.createElement('div');
-  pw.className = 'poster-wrap';
-
-  if (item.poster) {
-    const img = document.createElement('img');
-    img.className = 'loading';
-    img.alt = item.title;
-    img.onload  = () => img.classList.remove('loading');
-    img.onerror = () => pw.replaceChild(noPoster(item.title), img);
-    img.src = item.poster;
-    pw.appendChild(img);
-  } else {
-    pw.appendChild(noPoster(item.title));
-  }
-
-  // Badges
-  const bw = document.createElement('div');
-  bw.className = 'badge-wrap';
-  if (item._type === 'tv') { const b = document.createElement('span'); b.className = 'badge badge-tv'; b.textContent = 'TV'; bw.appendChild(b); }
-  if (isWatched)           { const b = document.createElement('span'); b.className = 'badge badge-watched'; b.textContent = '✓ Watched'; bw.appendChild(b); }
-  if (isCollect)           { const b = document.createElement('span'); b.className = 'badge badge-collect'; b.textContent = '⬡ Collected'; bw.appendChild(b); }
-  pw.appendChild(bw);
+  // Poster wrap
+  const pw=document.createElement('div'); pw.className='poster-wrap';
+  renderPoster(pw, item);
 
   // Rating pill
-  const rp = document.createElement('div');
-  rp.className = 'rating-pill' + (item.rating ? '' : ' empty');
-  rp.title = 'Set rating';
-  rp.textContent = item.rating || '·';
-  const rpop = makeRatingPopup(item, rp);
-  rp.onclick = e => { e.stopPropagation(); togglePopup(rpop); };
-  pw.appendChild(rp);
-  pw.appendChild(rpop);
+  const rp=document.createElement('div');
+  rp.className='rating-pill'+(item.rating?'':' empty');
+  rp.title='Set rating'; rp.textContent=item.rating||'·';
+  const rpop=makeRatingPopup(item,rp);
+  rp.onclick=e=>{e.stopPropagation();togglePopup(rpop);};
+  pw.appendChild(rp); pw.appendChild(rpop);
+
+  // Change poster button
+  const cpBtn=document.createElement('button');
+  cpBtn.className='change-poster-btn'; cpBtn.textContent='⇄ Poster';
+  cpBtn.onclick=e=>{e.stopPropagation(); openPosterPicker(item, pw);};
+  pw.appendChild(cpBtn);
 
   card.appendChild(pw);
 
   // Info
-  const info = document.createElement('div');
-  info.className = 'card-info';
-  const metaParts = [item.year, item.runtime ? item.runtime + ' min' : ''].filter(Boolean).join(' · ');
-  info.innerHTML = `<div class="card-title" title="${escHtml(item.title)}">${escHtml(item.title)}</div>
-                    <div class="card-meta">${escHtml(metaParts)}</div>`;
+  const info=document.createElement('div'); info.className='card-info';
+  const meta=[item.year, item.runtime?item.runtime+' min':''].filter(Boolean).join(' · ');
+  info.innerHTML=`<div class="card-title" title="${esc(item.title)}">${esc(item.title)}</div>
+                  <div class="card-meta">${esc(meta)}${item._type==='tv'?' · TV':''}</div>`;
   card.appendChild(info);
 
   // Actions
-  const acts = document.createElement('div');
-  acts.className = 'card-actions';
-
-  const bWatch = makeActBtn('act-watch' + (isWatched ? ' on' : ''), '✓', isWatched ? 'Watched (click to undo)' : 'Mark as watched');
-  bWatch.onclick = () => toggleWatched(item, bWatch, pw);
-  acts.appendChild(bWatch);
-
-  const bCollect = makeActBtn('act-collect' + (isCollect ? ' on' : ''), '⬡', isCollect ? 'In collection (click to remove)' : 'Add to collection');
-  bCollect.onclick = () => toggleCollect(item, bCollect, pw);
-  acts.appendChild(bCollect);
-
-  const bList = makeActBtn('act-list', '≡', 'Add to lists');
-  const lpop = makeListPopup(item);
-  bList.onclick = e => { e.stopPropagation(); togglePopup(lpop); };
-  acts.appendChild(bList);
-  acts.appendChild(lpop);
-
+  const acts=document.createElement('div'); acts.className='card-actions';
+  const bW=actBtn('act-watch'+(isW?' on':''),'✓',isW?'Log another watch':'Mark as watched');
+  bW.onclick=()=>logWatch(item,bW,pw);
+  const bC=actBtn('act-collect'+(isC?' on':''),'⬡',isC?'In collection (click to remove)':'Add to collection');
+  bC.onclick=()=>toggleCollect(item,bC,pw);
+  const bL=actBtn('act-list','≡','Lists');
+  const lpop=makeListPopup(item);
+  bL.onclick=e=>{e.stopPropagation();togglePopup(lpop);};
+  acts.appendChild(bW); acts.appendChild(bC); acts.appendChild(bL); acts.appendChild(lpop);
   card.appendChild(acts);
 
-  document.addEventListener('click', () => {
-    lpop.classList.remove('vis');
-    rpop.classList.remove('vis');
-  }, { once: false });
-
+  document.addEventListener('click',()=>{lpop.classList.remove('vis');rpop.classList.remove('vis');});
   return card;
 }
 
+function renderPoster(pw, item) {
+  // Clear existing img/no-poster (keep buttons)
+  [...pw.children].forEach(c=>{if(c.tagName==='IMG'||c.classList.contains('no-poster')) c.remove();});
+  if (item.poster) {
+    const img=document.createElement('img'); img.className='loading'; img.alt=item.title;
+    img.onload=()=>img.classList.remove('loading');
+    img.onerror=()=>img.replaceWith(noPoster(item.title));
+    img.src=item.poster;
+    pw.insertBefore(img, pw.firstChild);
+  } else {
+    pw.insertBefore(noPoster(item.title), pw.firstChild);
+  }
+}
+
 function noPoster(title) {
-  const d = document.createElement('div');
-  d.className = 'no-poster';
-  d.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="20" height="20" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span>${escHtml(title)}</span>`;
+  const d=document.createElement('div'); d.className='no-poster';
+  d.innerHTML=`<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="20" height="20" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span>${esc(title)}</span>`;
   return d;
 }
 
-function makeActBtn(cls, text, title) {
-  const b = document.createElement('button');
-  b.className = 'act ' + cls;
-  b.textContent = text;
-  b.title = title;
-  return b;
+function actBtn(cls,text,title) {
+  const b=document.createElement('button'); b.className='act '+cls; b.textContent=text; b.title=title; return b;
 }
 
-function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-// ── Actions ──────────────────────────────────────────────────
-function toggleWatched(item, btn, pw) {
-  if (item.watched.toLowerCase() === 'yes') {
-    item.watched = ''; item.lastWatched = '';
-    item.times = Math.max(0, (parseInt(item.times) || 1) - 1) || '';
-    btn.classList.remove('on'); btn.title = 'Mark as watched';
-    // Remove watched badge
-    pw.querySelectorAll('.badge-watched').forEach(b => b.remove());
-    updateCells(item, [
-      { col: 'WATCHED', val: '' },
-      { col: 'LAST_WATCHED', val: '' },
-      { col: 'TIMES', val: item.times },
-    ]);
-  } else {
-    pendingWatch = { item, btn, pw };
-    document.getElementById('date-modal-title').textContent = item.title;
-    document.getElementById('date-input').valueAsDate = new Date();
-    document.getElementById('date-modal').classList.add('vis');
+// ── Poster Picker ────────────────────────────────────────────
+async function openPosterPicker(item, pw) {
+  // Remove existing picker popup
+  pw.querySelectorAll('.ppop').forEach(p=>p.remove());
+
+  const pop=document.createElement('div'); pop.className='popup ppop vis';
+  pop.innerHTML='<h5>Choose poster</h5><div class="ppop-loading">Fetching options…</div>';
+  pw.appendChild(pop);
+  pop.onclick=e=>e.stopPropagation();
+
+  try {
+    const type = item._type==='movie' ? 'movie' : 'tv';
+    const id   = item.tmdbId;
+    if (!id) { pop.innerHTML='<h5>Choose poster</h5><p style="color:var(--muted);font-size:12px">No TMDb ID found for this title.</p>'; return; }
+
+    const url = `https://api.themoviedb.org/3/${type}/${id}/images?api_key=${TMDB_KEY}`;
+    const data = await fetch(url).then(r=>r.json());
+    const posters = (data.posters||[]).slice(0,12);
+
+    if (!posters.length) { pop.innerHTML='<h5>Choose poster</h5><p style="color:var(--muted);font-size:12px">No alternate posters found.</p>'; return; }
+
+    pop.innerHTML='<h5>Choose poster</h5>';
+    const grid=document.createElement('div'); grid.className='ppop-grid';
+    posters.forEach(p=>{
+      const fullUrl=`https://image.tmdb.org/t/p/w500${p.file_path}`;
+      const img=document.createElement('img'); img.src=fullUrl; img.alt='Poster option';
+      if (item.poster===fullUrl) img.classList.add('selected');
+      img.onclick=async ()=>{
+        item.poster=fullUrl;
+        pop.remove();
+        renderPoster(pw, item);
+        await updateCells(item,[{col:'POSTER',val:fullUrl}]);
+      };
+      grid.appendChild(img);
+    });
+    pop.appendChild(grid);
+  } catch(e) {
+    pop.innerHTML='<h5>Choose poster</h5><p style="color:var(--muted);font-size:12px">Could not load posters.</p>';
   }
+
+  // Close on outside click
+  setTimeout(()=>{
+    document.addEventListener('click',()=>pop.remove(),{once:true});
+  },10);
+}
+
+// ── Watch logging (always adds a watch, never undoes) ────────
+function logWatch(item, btn, pw) {
+  pendingWatch={item,btn,pw};
+  document.getElementById('date-modal-title').textContent=item.title;
+  document.getElementById('date-input').valueAsDate=new Date();
+  document.getElementById('date-modal').classList.add('vis');
 }
 
 function confirmWatch() {
   if (!pendingWatch) return;
-  const { item, btn, pw } = pendingWatch;
-  const d = document.getElementById('date-input').value;
-  item.watched = 'Yes'; item.lastWatched = d;
-  item.times = (parseInt(item.times) || 0) + 1;
-  btn.classList.add('on'); btn.title = 'Watched (click to undo)';
-  // Add watched badge
-  const bw = pw.querySelector('.badge-wrap');
-  if (bw && !bw.querySelector('.badge-watched')) {
-    const b = document.createElement('span');
-    b.className = 'badge badge-watched'; b.textContent = '✓ Watched';
-    bw.appendChild(b);
-  }
+  const {item,btn,pw}=pendingWatch;
+  const d=document.getElementById('date-input').value;
+  item.watched='Yes';
+  item.lastWatched=d;
+  item.times=(parseInt(item.times)||0)+1;
+  btn.classList.add('on');
+  btn.title='Log another watch';
   document.getElementById('date-modal').classList.remove('vis');
-  pendingWatch = null;
-  updateCells(item, [
-    { col: 'WATCHED', val: 'Yes' },
-    { col: 'LAST_WATCHED', val: d },
-    { col: 'TIMES', val: item.times },
+  pendingWatch=null;
+  updateCells(item,[
+    {col:'WATCHED',val:'Yes'},
+    {col:'LAST_WATCHED',val:d},
+    {col:'TIMES',val:item.times},
   ]);
 }
 
 function cancelWatch() {
   document.getElementById('date-modal').classList.remove('vis');
-  pendingWatch = null;
+  pendingWatch=null;
 }
 
-function toggleCollect(item, btn, pw) {
-  const isOn = btn.classList.contains('on');
-  item.collection = isOn ? '' : 'Yes';
-  btn.classList.toggle('on', !isOn);
-  btn.title = isOn ? 'Add to collection' : 'In collection (click to remove)';
-  const bw = pw.querySelector('.badge-wrap');
-  if (isOn) {
-    bw && bw.querySelectorAll('.badge-collect').forEach(b => b.remove());
-  } else if (bw) {
-    const b = document.createElement('span');
-    b.className = 'badge badge-collect'; b.textContent = '⬡ Collected';
-    bw.appendChild(b);
-  }
-  updateCells(item, [{ col: 'COLLECTION', val: item.collection }]);
+// ── Collect ──────────────────────────────────────────────────
+function toggleCollect(item,btn,pw) {
+  const on=btn.classList.contains('on');
+  item.collection=on?'':'Yes';
+  btn.classList.toggle('on',!on);
+  btn.title=on?'Add to collection':'In collection (click to remove)';
+  updateCells(item,[{col:'COLLECTION',val:item.collection}]);
+  // Apply formatting to the cell
+  if (!on) applyFormatting(item,'COLLECTION',{backgroundColor:{red:0.839,green:0.976,blue:0.839},horizontalAlignment:'CENTER'});
 }
 
 // ── Rating popup ─────────────────────────────────────────────
-function makeRatingPopup(item, display) {
-  const pop = document.createElement('div');
-  pop.className = 'popup rpop';
-  pop.innerHTML = '<h5>Rate this</h5>';
-  const grid = document.createElement('div');
-  grid.className = 'rpop-grid';
-  for (let n = 1; n <= 10; n++) {
-    const b = document.createElement('button');
-    b.textContent = n;
-    if (String(item.rating) === String(n)) b.classList.add('selected');
-    b.onclick = e => {
-      e.stopPropagation();
-      item.rating = n;
-      display.textContent = n;
-      display.classList.remove('empty');
-      pop.querySelectorAll('button').forEach(x => x.classList.remove('selected'));
-      b.classList.add('selected');
-      pop.classList.remove('vis');
-      updateCells(item, [{ col: 'RATING', val: n }]);
+function makeRatingPopup(item,display) {
+  const pop=document.createElement('div'); pop.className='popup rpop';
+  pop.innerHTML='<h5>Rate this</h5>';
+  const grid=document.createElement('div'); grid.className='rpop-grid';
+  for(let n=1;n<=10;n++){
+    const b=document.createElement('button'); b.textContent=n;
+    if(String(item.rating)===String(n)) b.classList.add('selected');
+    b.onclick=e=>{
+      e.stopPropagation(); item.rating=n;
+      display.textContent=n; display.classList.remove('empty');
+      pop.querySelectorAll('button').forEach(x=>x.classList.remove('selected'));
+      b.classList.add('selected'); pop.classList.remove('vis');
+      updateCells(item,[{col:'RATING',val:n}]);
     };
     grid.appendChild(b);
   }
-  pop.appendChild(grid);
-  return pop;
+  pop.appendChild(grid); return pop;
 }
 
 // ── List popup ───────────────────────────────────────────────
 function makeListPopup(item) {
-  const lists = [
-    { key: 'watchlist', label: 'Watchlist',       col: 'WATCHLIST'  },
-    { key: 'list1001',  label: '1001 List',        col: 'LIST_1001'  },
-    { key: 'list1001d', label: '1001 w/Deletions', col: 'LIST_1001_D'},
-    { key: 'holly',     label: 'Watch with Holly', col: 'HOLLY'      },
+  const lists=[
+    {key:'watchlist',label:'Watchlist',      col:'WATCHLIST'},
+    {key:'list1001', label:'1001 List',       col:'LIST_1001'},
+    {key:'list1001d',label:'1001 w/Deletions',col:'LIST_1001_D'},
+    {key:'holly',    label:'Watch with Holly',col:'HOLLY'},
   ];
-  const pop = document.createElement('div');
-  pop.className = 'popup lpop';
-  pop.innerHTML = '<h5>Lists</h5>';
-  lists.forEach(l => {
-    const row = document.createElement('label');
-    row.className = 'list-item';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = item[l.key].toLowerCase() === 'yes';
-    cb.onclick = e => e.stopPropagation();
-    cb.onchange = () => {
-      item[l.key] = cb.checked ? 'Yes' : '';
-      updateCells(item, [{ col: l.col, val: item[l.key] }]);
+  const pop=document.createElement('div'); pop.className='popup lpop';
+  pop.innerHTML='<h5>Lists</h5>';
+  lists.forEach(l=>{
+    const row=document.createElement('label'); row.className='list-item';
+    const cb=document.createElement('input'); cb.type='checkbox';
+    cb.checked=item[l.key].toLowerCase()==='yes';
+    cb.onclick=e=>e.stopPropagation();
+    cb.onchange=async ()=>{
+      item[l.key]=cb.checked?'Yes':'';
+      await updateCells(item,[{col:l.col,val:item[l.key]}]);
+      // Apply blue highlight formatting if checked
+      if (cb.checked) applyFormatting(item, l.col, FMT_LIST_YES);
     };
-    row.appendChild(cb);
-    row.appendChild(document.createTextNode(l.label));
+    row.appendChild(cb); row.appendChild(document.createTextNode(l.label));
     pop.appendChild(row);
   });
   return pop;
@@ -899,9 +716,9 @@ function makeListPopup(item) {
 
 // ── Popup management ─────────────────────────────────────────
 function togglePopup(pop) {
-  if (openPopup && openPopup !== pop) openPopup.classList.remove('vis');
+  if (openPopup&&openPopup!==pop) openPopup.classList.remove('vis');
   pop.classList.toggle('vis');
-  openPopup = pop.classList.contains('vis') ? pop : null;
+  openPopup=pop.classList.contains('vis')?pop:null;
 }
 
 // ── Boot ─────────────────────────────────────────────────────
