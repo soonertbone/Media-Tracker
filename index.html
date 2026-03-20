@@ -151,7 +151,7 @@
         <button class="type-btn"        id="tb-movies" onclick="setType('movie')">Movies</button>
         <button class="type-btn"        id="tb-tv"     onclick="setType('tv')">TV</button>
       </div>
-      <div class="fg"><input type="text" id="f-search" placeholder="Search titles…" oninput="applyFilters()"></div>
+      <div class="fg"><input type="text" id="f-search" placeholder="Search titles…" oninput="debouncedFilter()"></div>
       <div class="fg">
         <span class="fl">Watched</span>
         <select id="f-watched" onchange="applyFilters()">
@@ -228,6 +228,13 @@
 </div>
 
 <script>
+// ── Debounce ─────────────────────────────────────────────────
+let _filterTimer = null;
+function debouncedFilter() {
+  clearTimeout(_filterTimer);
+  _filterTimer = setTimeout(applyFilters, 200);
+}
+
 // ── Config ───────────────────────────────────────────────────
 const CLIENT_ID = '740123788552-hb48rl4ejh63q7eitpn283genf2fj3tv.apps.googleusercontent.com';
 const SHEET_ID  = '1Zg422K-n3zb4RmDsVU90N9h2dYuOvdOIeoMLuFhWUos';
@@ -648,11 +655,17 @@ function confirmWatch() {
   btn.title='Log another watch';
   document.getElementById('date-modal').classList.remove('vis');
   pendingWatch=null;
-  updateCells(item,[
+  // Auto-remove from watchlist
+  const updates = [
     {col:'WATCHED',val:'Yes'},
     {col:'LAST_WATCHED',val:d},
     {col:'TIMES',val:item.times},
-  ]);
+  ];
+  if (item.watchlist.toLowerCase() === 'yes') {
+    item.watchlist = '';
+    updates.push({col:'WATCHLIST', val:''});
+  }
+  updateCells(item, updates);
 }
 
 function cancelWatch() {
