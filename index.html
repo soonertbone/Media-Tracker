@@ -554,14 +554,18 @@ function makeCard(item) {
 }
 
 function renderPoster(pw, item) {
-  // Clear existing img/no-poster (keep buttons)
+  // Clear existing img/no-poster (keep overlay buttons)
   [...pw.children].forEach(c=>{if(c.tagName==='IMG'||c.classList.contains('no-poster')) c.remove();});
   if (item.poster) {
-    const img=document.createElement('img'); img.className='loading'; img.alt=item.title;
-    img.onload=()=>img.classList.remove('loading');
+    const img=document.createElement('img'); img.alt=item.title;
+    img.style.opacity='0'; img.style.transition='opacity .3s';
     img.onerror=()=>img.replaceWith(noPoster(item.title));
-    img.src=item.poster;
+    // Insert before setting src so onload fires after element is in DOM
     pw.insertBefore(img, pw.firstChild);
+    img.onload=()=>{ img.style.opacity='1'; };
+    img.src=item.poster;
+    // If already cached, onload may not fire — force visible
+    if (img.complete) img.style.opacity='1';
   } else {
     pw.insertBefore(noPoster(item.title), pw.firstChild);
   }
