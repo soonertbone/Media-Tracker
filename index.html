@@ -726,6 +726,47 @@ function togglePopup(pop) {
 }
 
 // ── Boot ─────────────────────────────────────────────────────
+
+// Debug: show poster status in console and on page
+function debugPosters() {
+  const withPoster = allItems.filter(i => i.poster);
+  const sample = withPoster.slice(0, 3);
+  console.log('Total items:', allItems.length);
+  console.log('Items with poster URL:', withPoster.length);
+  sample.forEach(i => console.log(i.title, '->', i.poster));
+
+  // Try loading a poster URL directly
+  if (sample.length) {
+    const testImg = new Image();
+    testImg.onload  = () => console.log('✅ Test image loaded OK:', sample[0].poster);
+    testImg.onerror = (e) => console.log('❌ Test image FAILED:', sample[0].poster, e);
+    testImg.src = sample[0].poster;
+  }
+
+  // Show overlay on page
+  const div = document.createElement('div');
+  div.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#222;color:#eee;padding:12px;border-radius:8px;font-size:12px;z-index:9999;max-width:340px;border:1px solid #444';
+  div.innerHTML = '<b>Debug info</b><br>' +
+    'Total items: ' + allItems.length + '<br>' +
+    'With poster URL: ' + withPoster.length + '<br>' +
+    'Sample URL: ' + (sample[0] ? '<a href="' + sample[0].poster + '" target="_blank" style="color:#e8c97e;word-break:break-all">' + sample[0].poster + '</a>' : 'none') +
+    '<br><button onclick="this.parentNode.remove()" style="margin-top:8px;background:#444;border:none;color:#eee;padding:4px 8px;border-radius:4px;cursor:pointer">Close</button>';
+  document.body.appendChild(div);
+}
+
+// Add debug button to header after app loads
+window._origShowApp = showApp;
+showApp = function() {
+  window._origShowApp();
+  setTimeout(() => {
+    const btn = document.createElement('button');
+    btn.textContent = '🔍 Debug';
+    btn.style.cssText = 'background:#333;border:1px solid #555;color:#eee;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:4px;';
+    btn.onclick = debugPosters;
+    document.getElementById('header').appendChild(btn);
+  }, 2000);
+};
+
 loadGIS();
 </script>
 </body>
