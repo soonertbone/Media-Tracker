@@ -77,12 +77,12 @@
   .card-actions { display:flex; align-items:center; padding:3px 6px 7px; gap:4px; position:relative; }
   .act { width:26px; height:26px; border-radius:50%; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; transition:transform .12s,background .15s; flex-shrink:0; }
   .act:hover { transform:scale(1.2); }
-  .act-watch   { background:var(--surface); color:var(--muted); }
-  .act-watch.on { background:rgba(91,186,138,.2); color:var(--watched); }
-  .act-collect { background:var(--surface); color:var(--muted); }
-  .act-collect.on { background:rgba(232,201,126,.2); color:var(--accent); }
-  .act-list    { background:var(--surface); color:var(--muted); }
-  .act-list:hover { background:rgba(126,158,232,.15); color:var(--accent2); }
+  .act-watch   { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
+  .act-watch.on { background:rgba(91,186,138,.25); color:var(--watched); border-color:var(--watched); }
+  .act-collect { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
+  .act-collect.on { background:rgba(232,201,126,.25); color:var(--accent); border-color:var(--accent); }
+  .act-list    { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
+  .act-list:hover { background:rgba(126,158,232,.2); color:var(--accent2); border-color:var(--accent2); }
 
   /* Popups */
   .popup { position:absolute; bottom:36px; background:#1e1e28; border:1px solid var(--border); border-radius:var(--radius); padding:10px; z-index:100; display:none; box-shadow:0 8px 32px rgba(0,0,0,.6); }
@@ -499,17 +499,46 @@ function applyFilters() {
 }
 
 // ── Render ───────────────────────────────────────────────────
+const PAGE_SIZE = 80; // cards per page
+let renderedCount = 0;
+let isRendering = false;
+
 function renderGrid() {
-  const grid=document.getElementById('grid');
-  grid.innerHTML='';
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  renderedCount = 0;
+
   if (!filtered.length) {
-    const e=document.createElement('div'); e.id='empty-state';
-    e.innerHTML='<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><p>No titles match your filters</p>';
+    const e = document.createElement('div'); e.id = 'empty-state';
+    e.innerHTML = '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><p>No titles match your filters</p>';
     grid.appendChild(e); return;
   }
-  const frag=document.createDocumentFragment();
-  filtered.forEach(item=>frag.appendChild(makeCard(item)));
+
+  renderNextPage();
+}
+
+function renderNextPage() {
+  if (isRendering) return;
+  const grid = document.getElementById('grid');
+  const batch = filtered.slice(renderedCount, renderedCount + PAGE_SIZE);
+  if (!batch.length) return;
+
+  isRendering = true;
+  const frag = document.createDocumentFragment();
+  batch.forEach(item => frag.appendChild(makeCard(item)));
   grid.appendChild(frag);
+  renderedCount += batch.length;
+  isRendering = false;
+}
+
+// Infinite scroll — load more as user scrolls down
+function setupInfiniteScroll() {
+  const grid = document.getElementById('grid');
+  grid.addEventListener('scroll', () => {
+    if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 300) {
+      renderNextPage();
+    }
+  });
 }
 
 function makeCard(item) {
@@ -771,6 +800,7 @@ function debugPosters() {
 window._origShowApp = showApp;
 showApp = function() {
   window._origShowApp();
+  setupInfiniteScroll();
   setTimeout(() => {
     const btn = document.createElement('button');
     btn.textContent = '🔍 Debug';
