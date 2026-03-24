@@ -121,6 +121,45 @@
   .btn-confirm { background:var(--accent); color:#0c0c0f; font-weight:500; }
   .btn-cancel  { background:var(--card); color:var(--muted); border:1px solid var(--border); }
 
+  /* TV Season Modal */
+  #tv-watch-modal .modal-box { width:380px; }
+  .season-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin:10px 0 14px; }
+  .season-cb { display:none; }
+  .season-lbl {
+    display:flex; align-items:center; justify-content:center;
+    height:36px; border-radius:6px; font-size:13px; font-weight:500;
+    cursor:pointer; border:1px solid var(--border); background:var(--card);
+    color:var(--muted); transition:all .15s; user-select:none;
+  }
+  .season-cb:checked + .season-lbl {
+    background:rgba(91,186,138,.2); color:var(--watched);
+    border-color:var(--watched);
+  }
+  .dropped-toggle {
+    display:flex; align-items:center; gap:8px; margin:10px 0;
+    font-size:13px; cursor:pointer;
+  }
+  .dropped-toggle input { accent-color:#e8a060; cursor:pointer; width:14px; height:14px; }
+  .watch-pct-bar { height:4px; background:var(--border); border-radius:2px; margin-top:12px; overflow:hidden; }
+  .watch-pct-fill { height:100%; border-radius:2px; transition:width .3s; }
+
+  /* Watch button opacity based on completion */
+  .act-watch { transition:background .15s, color .15s, opacity .15s, border-color .15s; }
+
+  /* Large target mode (Vision Pro) */
+  body.large-targets .act { width:42px; height:42px; font-size:16px; }
+  body.large-targets .card-actions { gap:8px; padding:6px 8px 10px; }
+  body.large-targets .rating-pill { font-size:13px; padding:4px 10px; }
+  body.large-targets .change-poster-btn { font-size:12px; padding:5px 10px; opacity:1; }
+  body.large-targets #grid { grid-template-columns:repeat(auto-fill,minmax(175px,1fr)); gap:18px; }
+  body.large-targets .card-title { font-size:12px; }
+  body.large-targets .card-meta  { font-size:11px; }
+  body.large-targets .type-btn   { padding:6px 16px; font-size:13px; }
+  body.large-targets input[type=text] { padding:7px 10px; font-size:13px; }
+  body.large-targets select { padding:6px 10px; font-size:13px; }
+  #large-target-btn { background:var(--card); border:1px solid var(--border); color:var(--muted); padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; white-space:nowrap; transition:all .15s; }
+  #large-target-btn.active { background:rgba(126,158,232,.2); border-color:var(--accent2); color:var(--accent2); }
+
   /* Loading/empty */
   #loading-state,#empty-state { grid-column:1/-1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 20px; gap:12px; color:var(--muted); }
   .nav-btn { background:none; border:none; color:var(--muted); padding:4px 14px; border-radius:5px; font-size:12px; font-family:'DM Sans',sans-serif; cursor:pointer; transition:all .15s; }
@@ -191,21 +230,21 @@
       <div class="fg"><input type="text" id="f-search" placeholder="Search titles…" oninput="debouncedFilter()"></div>
       <div class="fg">
         <span class="fl">Watched</span>
-        <select id="f-watched" onchange="applyFilters()">
+        <select id="f-watched" onchange="applyFilters(true)">
           <option value="">All</option><option value="yes">Watched</option>
           <option value="no">Unwatched</option><option value="null">— Hide —</option>
         </select>
       </div>
       <div class="fg">
         <span class="fl">Collection</span>
-        <select id="f-collect" onchange="applyFilters()">
+        <select id="f-collect" onchange="applyFilters(true)">
           <option value="">All</option><option value="yes">Collected</option>
           <option value="no">Not collected</option><option value="null">— Hide —</option>
         </select>
       </div>
       <div class="fg">
         <span class="fl">List</span>
-        <select id="f-list" onchange="applyFilters()">
+        <select id="f-list" onchange="applyFilters(true)">
           <option value="">Any</option>
           <option value="watchlist">Watchlist</option>
           <option value="list1001">1001 List</option>
@@ -213,6 +252,11 @@
           <option value="holly">Watch with Holly</option>
           <option value="none">— Not on any list —</option>
           <option value="tv-incomplete">📺 Incomplete TV collection</option>
+          <option value="tv-full">✅ Fully watched TV</option>
+          <option value="tv-partial">〰️ Partially watched TV</option>
+          <option value="tv-notstarted">⭕ Not started TV</option>
+          <option value="tv-behind">⏩ TV — behind on seasons</option>
+          <option value="tv-dropped">🚫 Dropped shows</option>
         </select>
       </div>
       <div class="fg">
@@ -227,11 +271,11 @@
       </div>
       <div class="fg">
         <span class="fl">Country</span>
-        <select id="f-country" onchange="applyFilters()"><option value="">All</option></select>
+        <select id="f-country" onchange="applyFilters(true)"><option value="">All</option></select>
       </div>
       <div class="fg">
         <span class="fl">Language</span>
-        <select id="f-lang" onchange="applyFilters()"><option value="">All</option></select>
+        <select id="f-lang" onchange="applyFilters(true)"><option value="">All</option></select>
       </div>
       <div class="fg">
         <span class="fl">Sort</span>
@@ -247,11 +291,32 @@
       </div>
       <span id="count"></span>
     </div>
+    <button id="large-target-btn" onclick="toggleLargeTargets()" title="Toggle large touch targets (Vision Pro)">⊕</button>
     <img id="user-avatar" title="Signed in" alt="User">
   </div>
   <div id="grid"><div id="loading-state"><div class="spinner"></div><p>Loading your library…</p></div></div>
 </div>
   <div id="stats-page"></div>
+
+<!-- TV Watch Modal -->
+<div class="modal-overlay" id="tv-watch-modal">
+  <div class="modal-box">
+    <h3>Log a watch</h3>
+    <p id="tv-modal-title" style="color:var(--muted);font-size:12px;margin-bottom:4px"></p>
+    <div id="season-checkboxes" style="min-height:50px"><p style="color:var(--muted);font-size:12px">Loading seasons…</p></div>
+    <label class="dropped-toggle">
+      <input type="checkbox" id="dropped-cb"> Mark as Dropped (stopped watching)
+    </label>
+    <div style="margin-top:10px">
+      <span class="fl">Date watched</span>
+      <input type="date" id="tv-date-input" class="modal-input" style="margin-top:6px">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn btn-confirm" onclick="confirmTVWatch()">Save</button>
+      <button class="modal-btn btn-cancel"  onclick="cancelTVWatch()">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <!-- Date modal -->
 <div class="modal-overlay" id="date-modal">
@@ -271,7 +336,7 @@
 let _filterTimer = null;
 function debouncedFilter() {
   clearTimeout(_filterTimer);
-  _filterTimer = setTimeout(applyFilters, 200);
+  _filterTimer = setTimeout(()=>applyFilters(true), 200);
 }
 
 // ── Config ───────────────────────────────────────────────────
@@ -282,7 +347,7 @@ const TMDB_KEY  = 'a746e092fa14f46f1abdbca19e11d8b7';
 
 // ── Column maps (0-based) ────────────────────────────────────
 const MC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,POSTER:15,TMDB_ID:16,IMDB_ID:17,DATE_ADDED:18};
-const TC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,SEASONS:15,POSTER:16,TMDB_ID:17,IMDB_ID:18,DATE_ADDED:19};
+const TC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,SEASONS:15,SEASONS_WATCHED:16,POSTER:17,TMDB_ID:18,IMDB_ID:19,DATE_ADDED:20};
 
 // Formatting constants matching the spreadsheet
 const FMT_CENTER = { horizontalAlignment: 'CENTER' };
@@ -396,6 +461,7 @@ function rowToItem(row, cols, type, rowNum) {
     holly:      row[cols.HOLLY]       ||'',
     collection: row[cols.COLLECTION]  ||'',
     seasons:    type==='tv' ? (row[cols.SEASONS]||'') : '',
+    seasonsWatched: type==='tv' ? (row[cols.SEASONS_WATCHED]||'') : '',
     poster:     row[cols.POSTER]      ||'',
     tmdbId:     row[cols.TMDB_ID]     ||'',
   };
@@ -473,7 +539,9 @@ function setType(t) {
   applyFilters();
 }
 
-function applyFilters() {
+function applyFilters(fromFilterChange) {
+  // When a non-sort filter changes, recall the saved sort for this new combo
+  if (fromFilterChange) recallSort();
   const s   = document.getElementById('f-search').value.toLowerCase();
   const fw  = document.getElementById('f-watched').value;
   const fc  = document.getElementById('f-collect').value;
@@ -508,15 +576,39 @@ function applyFilters() {
     if (fl==='holly'     && i.holly.toLowerCase()!=='yes')     return false;
     if (fl==='none'      && onAny) return false;
     if (fl==='tv-incomplete') {
-      // Only show TV shows that are collected but missing seasons
-      if (i._type !== 'tv') return false;
-      if (i.collection.toLowerCase() !== 'yes') return false;
-      if (!i.tmdbId) return false;
+      if (i._type !== 'tv' || i.collection.toLowerCase() !== 'yes') return false;
       const cached = tmdbSeasonCache[i.tmdbId];
-      if (cached === undefined) return true; // include pending, will update once loaded
+      if (cached === undefined) return true;
       if (cached === null) return false;
-      const collected = parseCollectedSeasons(i.seasons);
-      if (collected.length >= cached) return false;
+      if (parseCollectedSeasons(i.seasons).length >= cached) return false;
+    }
+    if (fl==='tv-full') {
+      if (i._type !== 'tv') return false;
+      const cached = tmdbSeasonCache[i.tmdbId];
+      if (!cached) return false;
+      if (parseWatchedSeasons(i.seasonsWatched).length < cached) return false;
+    }
+    if (fl==='tv-partial') {
+      if (i._type !== 'tv') return false;
+      const sw = parseWatchedSeasons(i.seasonsWatched).length;
+      const cached = tmdbSeasonCache[i.tmdbId];
+      if (sw === 0) return false;
+      if (cached && sw >= cached) return false;
+    }
+    if (fl==='tv-notstarted') {
+      if (i._type !== 'tv') return false;
+      if (parseWatchedSeasons(i.seasonsWatched).length > 0) return false;
+      if (i.watched === 'Dropped') return false;
+    }
+    if (fl==='tv-behind') {
+      if (i._type !== 'tv') return false;
+      const cached = tmdbSeasonCache[i.tmdbId];
+      if (!cached) return false;
+      const sw = parseWatchedSeasons(i.seasonsWatched).length;
+      if (sw === 0 || sw >= cached) return false;
+    }
+    if (fl==='tv-dropped') {
+      if (i._type !== 'tv' || i.watched !== 'Dropped') return false;
     }
 
     const yr=parseInt(i.year)||0;
@@ -546,6 +638,9 @@ function applyFilters() {
   }
 
   document.getElementById('count').textContent = filtered.length.toLocaleString()+' titles';
+  // Save current sort for this filter combination
+  const sortSel = document.getElementById('f-sort');
+  if (sortSel) saveSort(sortSel.value);
   renderGrid();
 }
 
@@ -626,8 +721,16 @@ function makeCard(item) {
 
   // Actions
   const acts=document.createElement('div'); acts.className='card-actions';
-  const bW=actBtn('act-watch'+(isW?' on':''),'✓',isW?'Log another watch':'Mark as watched');
+  const bW=actBtn('act-watch','✓','Mark as watched');
   bW.onclick=()=>logWatch(item,bW,pw);
+  // Set initial TV button appearance after card is in DOM
+  if (item._type==='tv') {
+    const cachedTotal = tmdbSeasonCache[item.tmdbId];
+    updateTVWatchBtn(bW, item, cachedTotal||0);
+  } else if (isW) {
+    bW.classList.add('on');
+    bW.title='Log another watch';
+  }
   const bC=actBtn('act-collect'+(isC?' on':''),'⬡',isC?'In collection (click to remove)':'Add to collection');
   bC.onclick=()=>toggleCollect(item,bC,pw);
   const onAnyList = ['watchlist','list1001','list1001d','holly'].some(k=>item[k].toLowerCase()==='yes');
@@ -639,8 +742,8 @@ function makeCard(item) {
 
   document.addEventListener('click',()=>{lpop.classList.remove('vis');rpop.classList.remove('vis');});
 
-  // Async season check for collected TV shows
-  if (item._type==='tv' && item.collection.toLowerCase()==='yes') {
+  // Async season check for all TV shows
+  if (item._type==='tv') {
     setTimeout(()=>updateSeasonBadge(item, card), 50);
   }
 
@@ -723,26 +826,31 @@ async function openPosterPicker(item, pw) {
   },10);
 }
 
-// ── Watch logging (always adds a watch, never undoes) ────────
+// ── Watch logging ────────────────────────────────────────────
+
 function logWatch(item, btn, pw) {
-  pendingWatch={item,btn,pw};
-  document.getElementById('date-modal-title').textContent=item.title;
-  document.getElementById('date-input').valueAsDate=new Date();
-  document.getElementById('date-modal').classList.add('vis');
+  if (item._type === 'tv') {
+    openTVWatchModal(item, btn, pw);
+  } else {
+    pendingWatch = {item, btn, pw};
+    document.getElementById('date-modal-title').textContent = item.title;
+    document.getElementById('date-input').valueAsDate = new Date();
+    document.getElementById('date-modal').classList.add('vis');
+  }
 }
 
+// ── Movie watch confirm ───────────────────────────────────────
 function confirmWatch() {
   if (!pendingWatch) return;
-  const {item,btn,pw}=pendingWatch;
-  const d=document.getElementById('date-input').value;
-  item.watched='Yes';
-  item.lastWatched=d;
-  item.times=(parseInt(item.times)||0)+1;
+  const {item,btn,pw} = pendingWatch;
+  const d = document.getElementById('date-input').value;
+  item.watched = 'Yes';
+  item.lastWatched = d;
+  item.times = (parseInt(item.times)||0) + 1;
   btn.classList.add('on');
-  btn.title='Log another watch';
+  btn.title = 'Log another watch';
   document.getElementById('date-modal').classList.remove('vis');
-  pendingWatch=null;
-  // Auto-remove from watchlist
+  pendingWatch = null;
   const updates = [
     {col:'WATCHED',val:'Yes'},
     {col:'LAST_WATCHED',val:d},
@@ -757,7 +865,155 @@ function confirmWatch() {
 
 function cancelWatch() {
   document.getElementById('date-modal').classList.remove('vis');
-  pendingWatch=null;
+  pendingWatch = null;
+}
+
+// ── TV watch modal ────────────────────────────────────────────
+let pendingTVWatch = null;
+
+async function openTVWatchModal(item, btn, pw) {
+  pendingTVWatch = {item, btn, pw};
+  document.getElementById('tv-modal-title').textContent = item.title;
+  document.getElementById('tv-date-input').valueAsDate = new Date();
+  document.getElementById('dropped-cb').checked = item.watched === 'Dropped';
+  document.getElementById('tv-watch-modal').classList.add('vis');
+
+  // Fetch seasons from TMDb
+  const cbWrap = document.getElementById('season-checkboxes');
+  cbWrap.innerHTML = '<p style="color:var(--muted);font-size:12px">Loading seasons…</p>';
+
+  const alreadyWatched = parseWatchedSeasons(item.seasonsWatched);
+  let totalSeasons = 0;
+
+  if (item.tmdbId) {
+    try {
+      const url  = `https://api.themoviedb.org/3/tv/${item.tmdbId}?api_key=${TMDB_KEY}`;
+      const data = await fetch(url).then(r=>r.json());
+      const seasons = (data.seasons||[]).filter(s=>s.season_number>0);
+      totalSeasons = seasons.length;
+
+      if (seasons.length) {
+        cbWrap.innerHTML = '<p style="font-size:11px;color:var(--muted);margin-bottom:6px">Which seasons have you watched?</p><div class="season-grid"></div>';
+        const grid = cbWrap.querySelector('.season-grid');
+        seasons.forEach(s => {
+          const n   = s.season_number;
+          const id  = 'scb-' + n;
+          const inp = document.createElement('input');
+          inp.type = 'checkbox'; inp.className = 'season-cb';
+          inp.id = id; inp.value = n;
+          inp.checked = alreadyWatched.includes(n);
+          inp.onchange = updateTVModalPctBar;
+          const lbl = document.createElement('label');
+          lbl.className = 'season-lbl'; lbl.htmlFor = id;
+          lbl.textContent = 'S' + n;
+          grid.appendChild(inp); grid.appendChild(lbl);
+        });
+        updateTVModalPctBar();
+      } else {
+        cbWrap.innerHTML = '<p style="color:var(--muted);font-size:12px">No season data found on TMDb.</p>';
+      }
+    } catch(e) {
+      cbWrap.innerHTML = '<p style="color:var(--muted);font-size:12px">Could not load season data.</p>';
+    }
+  } else {
+    cbWrap.innerHTML = '<p style="color:var(--muted);font-size:12px">No TMDb ID — enter seasons manually in the sheet.</p>';
+  }
+}
+
+function updateTVModalPctBar() {
+  const checked = [...document.querySelectorAll('.season-cb:checked')].length;
+  const total   = document.querySelectorAll('.season-cb').length;
+  // No bar needed in modal — just used to keep track
+}
+
+async function confirmTVWatch() {
+  if (!pendingTVWatch) return;
+  const {item, btn, pw} = pendingTVWatch;
+  const d       = document.getElementById('tv-date-input').value;
+  const dropped = document.getElementById('dropped-cb').checked;
+
+  const checkedSeasons = [...document.querySelectorAll('.season-cb:checked')].map(cb=>parseInt(cb.value));
+  const totalSeasons   = document.querySelectorAll('.season-cb').length;
+
+  // Merge with previously watched seasons
+  const prev    = parseWatchedSeasons(item.seasonsWatched);
+  const merged  = [...new Set([...prev, ...checkedSeasons])].sort((a,b)=>a-b);
+  const seasonsStr = merged.join(', ');
+
+  // Determine watched status
+  let watchedVal = '';
+  if (dropped) {
+    watchedVal = 'Dropped';
+  } else if (merged.length > 0 && totalSeasons > 0 && merged.length >= totalSeasons) {
+    watchedVal = 'Yes';
+  } else if (merged.length > 0) {
+    watchedVal = 'Yes'; // at least started — column shows "Yes" for any watched
+  }
+
+  item.seasonsWatched = seasonsStr;
+  item.watched        = dropped ? 'Dropped' : (merged.length > 0 ? 'Yes' : '');
+  item.lastWatched    = d || item.lastWatched;
+  item.times          = (parseInt(item.times)||0) + (checkedSeasons.length > 0 || dropped ? 1 : 0);
+
+  // Update watch button appearance
+  updateTVWatchBtn(btn, item, totalSeasons || tmdbSeasonCache[item.tmdbId] || 0);
+
+  document.getElementById('tv-watch-modal').classList.remove('vis');
+  pendingTVWatch = null;
+
+  const updates = [
+    {col:'SEASONS_WATCHED', val:seasonsStr},
+    {col:'WATCHED',         val:item.watched},
+    {col:'LAST_WATCHED',    val:item.lastWatched},
+    {col:'TIMES',           val:item.times},
+  ];
+  if (item.watchlist.toLowerCase() === 'yes' && item.watched === 'Yes') {
+    item.watchlist = '';
+    updates.push({col:'WATCHLIST', val:''});
+  }
+  updateCells(item, updates);
+}
+
+function cancelTVWatch() {
+  document.getElementById('tv-watch-modal').classList.remove('vis');
+  pendingTVWatch = null;
+}
+
+function parseWatchedSeasons(str) {
+  if (!str) return [];
+  return String(str).split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+}
+
+function tvWatchPct(item, totalSeasons) {
+  if (!totalSeasons) return 0;
+  const watched = parseWatchedSeasons(item.seasonsWatched).length;
+  return Math.min(watched / totalSeasons, 1);
+}
+
+function updateTVWatchBtn(btn, item, totalSeasons) {
+  const dropped = item.watched === 'Dropped';
+  const pct     = tvWatchPct(item, totalSeasons);
+
+  if (dropped) {
+    btn.style.background    = 'rgba(232,160,96,.25)';
+    btn.style.color         = '#e8a060';
+    btn.style.borderColor   = '#e8a060';
+    btn.title = 'Dropped — click to update';
+  } else if (pct === 0) {
+    btn.classList.remove('on');
+    btn.style.background  = '';
+    btn.style.color       = '';
+    btn.style.borderColor = '';
+    btn.style.opacity     = '1';
+    btn.title = 'Mark seasons watched';
+  } else {
+    btn.classList.add('on');
+    btn.style.opacity     = Math.max(0.25 + pct * 0.75, 0.25).toFixed(2);
+    btn.style.background  = '';
+    btn.style.color       = '';
+    btn.style.borderColor = '';
+    btn.title = pct >= 1 ? 'Fully watched — click to update' : `${Math.round(pct*100)}% watched — click to update`;
+  }
 }
 
 // ── Collect ──────────────────────────────────────────────────
@@ -1028,21 +1284,104 @@ function parseCollectedSeasons(seasonsStr) {
 }
 
 async function updateSeasonBadge(item, card) {
-  if (item._type !== 'tv' || !item.collection || item.collection.toLowerCase() !== 'yes') return;
+  if (item._type !== 'tv') return;
   const latest = await checkTVSeasons(item);
   if (!latest) return;
-  const collected = parseCollectedSeasons(item.seasons);
-  if (collected.length < latest) {
-    // Show incomplete badge
-    const pw = card.querySelector('.poster-wrap');
-    if (!pw || pw.querySelector('.season-badge')) return;
-    const badge = document.createElement('div');
-    badge.className = 'season-badge';
-    badge.style.cssText = 'position:absolute;bottom:6px;left:6px;background:rgba(232,126,126,.9);color:#fff;font-size:9px;font-weight:bold;padding:2px 6px;border-radius:4px;z-index:3;backdrop-filter:blur(4px)';
-    badge.title = `You have seasons ${collected.join(', ')} but ${latest} seasons exist`;
-    badge.textContent = `S${collected.length}/${latest}`;
-    pw.appendChild(badge);
+
+  // Update watch button opacity now that we know total seasons
+  const btn = card.querySelector('.act-watch');
+  if (btn) updateTVWatchBtn(btn, item, latest);
+
+  // Collection incomplete badge
+  if (item.collection && item.collection.toLowerCase() === 'yes') {
+    const collected = parseCollectedSeasons(item.seasons);
+    if (collected.length < latest) {
+      const pw = card.querySelector('.poster-wrap');
+      if (pw && !pw.querySelector('.season-badge')) {
+        const badge = document.createElement('div');
+        badge.className = 'season-badge';
+        badge.style.cssText = 'position:absolute;bottom:6px;left:6px;background:rgba(232,126,126,.9);color:#fff;font-size:9px;font-weight:bold;padding:2px 6px;border-radius:4px;z-index:3;backdrop-filter:blur(4px)';
+        badge.title = `Collected: seasons ${collected.join(', ')} of ${latest}`;
+        badge.textContent = `S${collected.length}/${latest}`;
+        pw.appendChild(badge);
+      }
+    }
   }
+
+  // Watched incomplete badge
+  const watchedSeasons = parseWatchedSeasons(item.seasonsWatched);
+  if (watchedSeasons.length > 0 && watchedSeasons.length < latest) {
+    const pw = card.querySelector('.poster-wrap');
+    if (pw && !pw.querySelector('.watch-badge')) {
+      const badge = document.createElement('div');
+      badge.className = 'watch-badge';
+      badge.style.cssText = 'position:absolute;bottom:6px;right:6px;background:rgba(91,186,138,.85);color:#001a0a;font-size:9px;font-weight:bold;padding:2px 6px;border-radius:4px;z-index:3;backdrop-filter:blur(4px)';
+      badge.title = `Watched: seasons ${watchedSeasons.join(', ')} of ${latest}`;
+      badge.textContent = `👁 ${watchedSeasons.length}/${latest}`;
+      pw.appendChild(badge);
+    }
+  }
+}
+
+// ── Sort memory per filter combination ───────────────────────
+// Key = serialized filter state, value = sort choice
+// Persisted in localStorage so it survives page reloads
+
+function getSortKey() {
+  // Build a key from all active filters (except sort itself)
+  const type    = document.getElementById('tb-all')?.classList.contains('active') ? 'all' :
+                  document.getElementById('tb-movies')?.classList.contains('active') ? 'movie' : 'tv';
+  const search  = document.getElementById('f-search')?.value || '';
+  const watched = document.getElementById('f-watched')?.value || '';
+  const collect = document.getElementById('f-collect')?.value || '';
+  const list    = document.getElementById('f-list')?.value || '';
+  const y1      = document.getElementById('f-y1')?.value || '';
+  const y2      = document.getElementById('f-y2')?.value || '';
+  const r1      = document.getElementById('f-r1')?.value || '';
+  const r2      = document.getElementById('f-r2')?.value || '';
+  const country = document.getElementById('f-country')?.value || '';
+  const lang    = document.getElementById('f-lang')?.value || '';
+  return `sort|${type}|${search}|${watched}|${collect}|${list}|${y1}|${y2}|${r1}|${r2}|${country}|${lang}`;
+}
+
+function saveSort(sortVal) {
+  try {
+    const key = getSortKey();
+    const saved = JSON.parse(localStorage.getItem('mv_sorts') || '{}');
+    saved[key] = sortVal;
+    // Keep only last 50 sort preferences to avoid bloat
+    const keys = Object.keys(saved);
+    if (keys.length > 50) delete saved[keys[0]];
+    localStorage.setItem('mv_sorts', JSON.stringify(saved));
+  } catch(e) {}
+}
+
+function recallSort() {
+  try {
+    const key   = getSortKey();
+    const saved = JSON.parse(localStorage.getItem('mv_sorts') || '{}');
+    const sel   = document.getElementById('f-sort');
+    if (saved[key] && sel) {
+      sel.value = saved[key];
+    }
+  } catch(e) {}
+}
+
+// ── Large targets toggle ──────────────────────────────────────
+function toggleLargeTargets() {
+  const active = document.body.classList.toggle('large-targets');
+  document.getElementById('large-target-btn').classList.toggle('active', active);
+  try { localStorage.setItem('mv_large_targets', active ? '1' : '0'); } catch(e) {}
+}
+
+function restoreLargeTargets() {
+  try {
+    if (localStorage.getItem('mv_large_targets') === '1') {
+      document.body.classList.add('large-targets');
+      const btn = document.getElementById('large-target-btn');
+      if (btn) btn.classList.add('active');
+    }
+  } catch(e) {}
 }
 
 // ── Boot ─────────────────────────────────────────────────────
@@ -1079,6 +1418,7 @@ window._origShowApp = showApp;
 showApp = function() {
   window._origShowApp();
   setupInfiniteScroll();
+  restoreLargeTargets();
   setTimeout(() => {
     const btn = document.createElement('button');
     btn.textContent = '🔍 Debug';
