@@ -1407,6 +1407,40 @@ function restoreLargeTargets() {
   } catch(e) {}
 }
 
+// ── TV Poster Debug ──────────────────────────────────────────
+function debugTVPosters() {
+  const tvItems = allItems.filter(i => i._type === 'tv');
+  const withPoster = tvItems.filter(i => i.poster);
+  const sample = tvItems.slice(0, 3);
+
+  let msg = `TV items: ${tvItems.length}\n`;
+  msg += `With poster: ${withPoster.length}\n\n`;
+  msg += `First 3 TV items:\n`;
+  sample.forEach(i => {
+    msg += `  ${i.title}: poster="${i.poster ? i.poster.substring(0,40)+'...' : 'EMPTY'}"\n`;
+    msg += `    _row=${i._row}, tmdbId="${i.tmdbId}"\n`;
+  });
+
+  // Also show raw sheet data for first TV row
+  fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('TV Shows')}!A2:V2`, {
+    headers: { Authorization: 'Bearer ' + accessToken }
+  }).then(r => r.json()).then(d => {
+    const row = (d.values || [[]])[0];
+    msg += `\nRaw row 2 from sheet (${row.length} cols):\n`;
+    row.forEach((v, i) => msg += `  [${i}]: ${String(v).substring(0, 40)}\n`);
+
+    const div = document.createElement('div');
+    div.style.cssText = 'position:fixed;inset:20px;background:#1a1a2e;color:#eee;padding:20px;border-radius:10px;overflow:auto;z-index:9999;font-size:11px;font-family:monospace;border:1px solid #444;white-space:pre';
+    div.textContent = msg;
+    const close = document.createElement('button');
+    close.textContent = '✕ Close';
+    close.style.cssText = 'position:absolute;top:10px;right:10px;background:#444;border:none;color:#eee;padding:6px 12px;border-radius:5px;cursor:pointer;';
+    close.onclick = () => div.remove();
+    div.appendChild(close);
+    document.body.appendChild(div);
+  });
+}
+
 // ── Boot ─────────────────────────────────────────────────────
 
 // Debug: show poster status in console and on page
@@ -1447,6 +1481,11 @@ showApp = function() {
     btn.textContent = '🔍 Debug';
     btn.style.cssText = 'background:#333;border:1px solid #555;color:#eee;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:4px;';
     btn.onclick = debugPosters;
+    const btn2 = document.createElement('button');
+    btn2.textContent = '📺 TV Debug';
+    btn2.style.cssText = 'background:#333;border:1px solid #555;color:#eee;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:4px;';
+    btn2.onclick = debugTVPosters;
+    document.getElementById('header').appendChild(btn2);
     document.getElementById('header').appendChild(btn);
   }, 2000);
 };
