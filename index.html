@@ -648,6 +648,17 @@ function setType(t) {
   applyFilters();
 }
 
+// Normalize titles for sorting (ignore leading articles like "The", "A", "An")
+function titleSortKey(title) {
+  let s = String(title || '').trim();
+  if (!s) return '';
+  // Strip leading quotes/brackets to avoid cases like '"The X"'
+  s = s.replace(/^[\s"'“”‘’\(\)\[\]\{\}]+/g, '');
+  // Strip leading articles
+  s = s.replace(/^(the|a|an)\s+/i, '');
+  return s.toLowerCase();
+}
+
 function applyFilters(fromFilterChange) {
   // When a non-sort filter changes, recall the saved sort for this new combo
   if (fromFilterChange) recallSort();
@@ -736,8 +747,18 @@ function applyFilters(fromFilterChange) {
     }
   } else {
     filtered.sort((a,b)=>{
-      if (srt==='title-asc')   return a.title.localeCompare(b.title);
-      if (srt==='title-desc')  return b.title.localeCompare(a.title);
+      if (srt==='title-asc')   {
+        const ka = titleSortKey(a.title);
+        const kb = titleSortKey(b.title);
+        const c = ka.localeCompare(kb);
+        return c !== 0 ? c : String(a.title).localeCompare(String(b.title));
+      }
+      if (srt==='title-desc')  {
+        const ka = titleSortKey(a.title);
+        const kb = titleSortKey(b.title);
+        const c = kb.localeCompare(ka);
+        return c !== 0 ? c : String(b.title).localeCompare(String(a.title));
+      }
       if (srt==='year-desc')   return (parseInt(b.year)||0)-(parseInt(a.year)||0);
       if (srt==='year-asc')    return (parseInt(a.year)||0)-(parseInt(b.year)||0);
       if (srt==='rating-desc') return (parseFloat(b.rating)||0)-(parseFloat(a.rating)||0);
