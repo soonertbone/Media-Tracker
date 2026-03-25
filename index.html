@@ -77,8 +77,8 @@
   .card-actions { display:flex; align-items:center; padding:3px 6px 7px; gap:4px; position:relative; }
   .act { width:26px; height:26px; border-radius:50%; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; transition:transform .12s,background .15s; flex-shrink:0; }
   .act:hover { transform:scale(1.2); }
-  .act-watch   { background:#3a2a5e; color:#8866cc; border:1px solid #5533aa; opacity:0.25; }
-  .act-watch.on { background:#5533aa; color:#fff; border-color:#7744dd; opacity:1; }
+  .act-watch        { background:rgba(85,51,170,0.25); color:rgba(136,102,204,0.5); border:1px solid rgba(85,51,170,0.3); }
+  .act-watch.on     { background:#5533aa; color:#fff; border-color:#7744dd; }
   .act-collect { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
   .act-collect.on { background:rgba(232,201,126,.25); color:var(--accent); border-color:var(--accent); }
   .act-list    { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
@@ -1017,34 +1017,31 @@ function updateTVWatchBtn(btn, item, totalSeasons) {
   const dropped = item.watched === 'Dropped';
   const pct     = tvWatchPct(item, totalSeasons);
 
-  // Reset inline styles first
+  // Reset all inline styles
   btn.style.background  = '';
   btn.style.color       = '';
   btn.style.borderColor = '';
-  btn.style.opacity     = '';
+  btn.classList.remove('on');
 
   if (dropped) {
-    // Amber/orange for dropped — consistent with Trakt's style
-    btn.classList.remove('on');
     btn.style.background  = 'rgba(232,160,96,0.9)';
     btn.style.color       = '#fff';
     btn.style.borderColor = '#e8a060';
-    btn.style.opacity     = '1';
     btn.title = 'Dropped — click to update';
   } else if (pct === 0) {
-    // Not started — very faint purple
-    btn.classList.remove('on');
-    btn.style.opacity = '0.25';
+    // Not started — CSS default (faint purple via rgba)
     btn.title = 'Mark seasons watched';
   } else if (pct >= 1) {
-    // Fully watched — full brightness
+    // Fully watched — solid purple
     btn.classList.add('on');
-    btn.style.opacity = '1';
     btn.title = 'Fully watched — click to update';
   } else {
-    // Partially watched — opacity scales linearly from 0.35 to 0.85
+    // Partially watched — interpolate alpha from 0.25 to 0.9
+    const alpha = (0.25 + pct * 0.65).toFixed(2);
     btn.classList.add('on');
-    btn.style.opacity = (0.35 + pct * 0.5).toFixed(2);
+    btn.style.background  = `rgba(85,51,170,${alpha})`;
+    btn.style.color       = pct > 0.4 ? '#fff' : 'rgba(255,255,255,0.7)';
+    btn.style.borderColor = `rgba(119,68,221,${alpha})`;
     btn.title = `${Math.round(pct*100)}% watched — click to update`;
   }
 }
