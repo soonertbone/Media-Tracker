@@ -84,9 +84,11 @@
   .act-collect.on { background:#12a58b; color:#fff; border-color:rgba(0,0,0,0.25); }
 
   /* Blue (lists) */
-  .act-list { background:#1f87e4; color:#fff; border:1px solid rgba(0,0,0,0.15); }
+  .act-list { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
   .act-list.on-list { background:#1f87e4; color:#fff; border-color:rgba(0,0,0,0.25); }
-  .act-list:hover { background:#1677c8; color:#fff; border-color:rgba(0,0,0,0.25); }
+  /* Keep hover neutral unless illuminated by lists */
+  .act-list:hover { background:#323245; color:#a7a7c8; border-color:#45455e; }
+  .act-list.on-list:hover { background:#1677c8; color:#fff; border-color:rgba(0,0,0,0.25); }
 
   /* Popups */
   .popup { position:absolute; bottom:36px; background:#1e1e28; border:1px solid var(--border); border-radius:var(--radius); padding:10px; z-index:100; display:none; box-shadow:0 8px 32px rgba(0,0,0,.6); }
@@ -352,6 +354,13 @@ try {
   const fromUrl = params.get('sheetId');
   if (fromUrl) SHEET_ID = fromUrl.trim();
 } catch (e) {}
+// Persist URL sheetId so we don't need it again on future logins.
+try {
+  if (SHEET_ID && SHEET_ID !== DEFAULT_SHEET_ID) {
+    localStorage.setItem('mv_sheet_id', SHEET_ID);
+    sessionStorage.setItem('mv_sheet_id', SHEET_ID);
+  }
+} catch (e) {}
 // Persist sheetId once provided so subsequent reloads work.
 try {
   const saved = localStorage.getItem('mv_sheet_id');
@@ -460,8 +469,18 @@ async function loadSheetData() {
 }
 
 function ensureSheetId() {
-  // If placeholder is still present, attempt to prompt once per tab session.
+  // Always re-check stored sheet id first (so we don't reprompt after login).
+  try {
+    const saved = localStorage.getItem('mv_sheet_id');
+    const ssaved = sessionStorage.getItem('mv_sheet_id');
+    const candidate = (saved && saved !== DEFAULT_SHEET_ID) ? saved : (ssaved && ssaved !== DEFAULT_SHEET_ID ? ssaved : '');
+    if (candidate) SHEET_ID = candidate.trim();
+  } catch (e) {}
+
+  // If we already have a real sheet id, we're good.
   if (SHEET_ID && SHEET_ID !== DEFAULT_SHEET_ID) return true;
+
+  // If placeholder is still present, attempt to prompt once per tab session.
   try {
     const prompted = sessionStorage.getItem('mv_sheet_id_prompted') === '1';
     if (!prompted) {
@@ -472,6 +491,7 @@ function ensureSheetId() {
       if (entered && entered.trim() && entered.trim() !== DEFAULT_SHEET_ID) {
         SHEET_ID = entered.trim();
         localStorage.setItem('mv_sheet_id', SHEET_ID);
+        sessionStorage.setItem('mv_sheet_id', SHEET_ID);
         return true;
       }
     }
