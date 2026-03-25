@@ -346,7 +346,8 @@ function debouncedFilter() {
 
 // ── Config ───────────────────────────────────────────────────
 const CLIENT_ID = '740123788552-hb48rl4ejh63q7eitpn283genf2fj3tv.apps.googleusercontent.com';
-const DEFAULT_SHEET_ID = 'YOUR_SHEET_ID_HERE';
+const DEFAULT_SHEET_ID = '1ze-t_ErYfc_5ih3ZA89lS2XgwtBAmXIO-E54AMqcG1U';
+const DEFAULT_IS_PLACEHOLDER = DEFAULT_SHEET_ID === 'YOUR_SHEET_ID_HERE';
 let SHEET_ID = DEFAULT_SHEET_ID;
 // Allow passing sheetId via URL (preferred) to avoid editing the file.
 try {
@@ -469,6 +470,9 @@ async function loadSheetData() {
 }
 
 function ensureSheetId() {
+  // If the default is a real Sheet ID, never prompt.
+  if (!DEFAULT_IS_PLACEHOLDER) return !!SHEET_ID;
+
   // Always re-check stored sheet id first (so we don't reprompt after login).
   try {
     const saved = localStorage.getItem('mv_sheet_id');
