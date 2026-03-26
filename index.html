@@ -128,6 +128,22 @@
   .btn-confirm { background:var(--accent); color:#0c0c0f; font-weight:500; }
   .btn-cancel  { background:var(--card); color:var(--muted); border:1px solid var(--border); }
 
+  /* Add title modal */
+  #add-modal .modal-box { width:520px; text-align:left; }
+  #add-modal .modal-box h3 { text-align:center; }
+  .add-row { display:flex; gap:8px; align-items:center; }
+  .add-hint { font-size:12px; color:var(--muted); margin-top:10px; text-align:center; }
+  .add-results { margin-top:12px; max-height:340px; overflow:auto; border:1px solid var(--border); border-radius:10px; background:rgba(0,0,0,0.12); }
+  .add-res { display:flex; gap:10px; align-items:center; padding:10px 12px; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.06); }
+  .add-res:last-child { border-bottom:none; }
+  .add-res:hover { background:rgba(232,201,126,0.08); }
+  .add-res .t { font-weight:500; font-size:13px; }
+  .add-res .m { font-size:11px; color:var(--muted); margin-top:2px; }
+  .pill { font-size:10px; padding:2px 6px; border-radius:999px; border:1px solid rgba(255,255,255,0.14); color:#fff; background:rgba(255,255,255,0.06); flex-shrink:0; }
+  .pill.movie { border-color:rgba(232,201,126,0.35); color:var(--accent); background:rgba(232,201,126,0.10); }
+  .pill.tv    { border-color:rgba(126,158,232,0.35); color:var(--accent2); background:rgba(126,158,232,0.10); }
+  .add-status { margin-top:10px; font-size:12px; color:var(--muted); text-align:center; min-height:16px; }
+
   /* TV Season Modal */
   #tv-watch-modal .modal-box { width:380px; }
   .season-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin:10px 0 14px; }
@@ -166,6 +182,8 @@
   body.large-targets select { padding:6px 10px; font-size:13px; }
   #large-target-btn { background:var(--card); border:1px solid var(--border); color:var(--muted); padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; white-space:nowrap; transition:all .15s; }
   #large-target-btn.active { background:rgba(126,158,232,.2); border-color:var(--accent2); color:var(--accent2); }
+  #add-btn { background:var(--card); border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; white-space:nowrap; transition:all .15s; }
+  #add-btn:hover { border-color:var(--accent); color:var(--accent); }
 
   /* Loading/empty */
   #loading-state,#empty-state { grid-column:1/-1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 20px; gap:12px; color:var(--muted); }
@@ -298,6 +316,7 @@
       </div>
       <span id="count"></span>
     </div>
+    <button id="add-btn" onclick="openAddModal()" title="Add a new movie or TV show">＋ Add</button>
     <button id="large-target-btn" onclick="toggleLargeTargets()" title="Toggle large touch targets (Vision Pro)">⊕</button>
     <img id="user-avatar" title="Signed in" alt="User">
   </div>
@@ -335,6 +354,21 @@
       <button class="modal-btn btn-confirm" onclick="confirmWatch()">Save</button>
       <button class="modal-btn btn-cancel"  onclick="cancelWatch()">Cancel</button>
     </div>
+  </div>
+</div>
+
+<!-- Add title modal -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal-box">
+    <h3>Add a title</h3>
+    <p style="text-align:center">Search movies and TV, then pick the correct year.</p>
+    <div class="add-row">
+      <input type="text" id="add-q" class="modal-input" placeholder="Search TMDb (e.g. The Pitt)" oninput="debouncedAddSearch()" autocomplete="off">
+      <button class="modal-btn btn-cancel" style="flex:0 0 auto;padding:9px 12px" onclick="closeAddModal()">Close</button>
+    </div>
+    <div class="add-status" id="add-status"></div>
+    <div class="add-results" id="add-results" style="display:none"></div>
+    <div class="add-hint">Tip: click a result to add it to your Watchlist.</div>
   </div>
 </div>
 
@@ -1129,6 +1163,298 @@ async function confirmTVWatch() {
 function cancelTVWatch() {
   document.getElementById('tv-watch-modal').classList.remove('vis');
   pendingTVWatch = null;
+}
+
+// ── Add title (TMDb search → append to sheet) ─────────────────
+let _addTimer = null;
+let _addResults = [];
+let _addInFlight = 0;
+
+function openAddModal() {
+  const m = document.getElementById('add-modal');
+  if (!m) return;
+  const status = document.getElementById('add-status');
+  const results = document.getElementById('add-results');
+  if (status) status.textContent = '';
+  if (results) { results.style.display = 'none'; results.innerHTML = ''; }
+  const q = document.getElementById('add-q');
+  if (q) q.value = '';
+  m.classList.add('vis');
+  setTimeout(() => q?.focus(), 50);
+}
+
+function closeAddModal() {
+  document.getElementById('add-modal')?.classList.remove('vis');
+}
+
+function debouncedAddSearch() {
+  clearTimeout(_addTimer);
+  _addTimer = setTimeout(addSearch, 250);
+}
+
+function setAddStatus(msg) {
+  const el = document.getElementById('add-status');
+  if (el) el.textContent = msg || '';
+}
+
+function displayRegion(code) {
+  try {
+    const dn = new Intl.DisplayNames(['en'], { type: 'region' });
+    return dn.of(String(code).toUpperCase()) || code;
+  } catch (e) { return code; }
+}
+
+function displayLanguage(code) {
+  try {
+    const dn = new Intl.DisplayNames(['en'], { type: 'language' });
+    return dn.of(String(code).toLowerCase()) || code;
+  } catch (e) { return code; }
+}
+
+async function addSearch() {
+  const q = (document.getElementById('add-q')?.value || '').trim();
+  const resWrap = document.getElementById('add-results');
+  if (!q) {
+    _addResults = [];
+    if (resWrap) { resWrap.style.display = 'none'; resWrap.innerHTML = ''; }
+    setAddStatus('');
+    return;
+  }
+
+  const myReq = ++_addInFlight;
+  setAddStatus('Searching…');
+
+  try {
+    const [m, tv] = await Promise.all([
+      tmdbSearch('movie', q),
+      tmdbSearch('tv', q),
+    ]);
+    if (myReq !== _addInFlight) return;
+
+    const merged = [
+      ...m.map(x => ({...x, _type:'movie'})),
+      ...tv.map(x => ({...x, _type:'tv'})),
+    ];
+    merged.sort((a,b)=>{
+      const pa = Number(a.popularity)||0, pb = Number(b.popularity)||0;
+      if (pb !== pa) return pb - pa;
+      return (Number(b.year)||0) - (Number(a.year)||0);
+    });
+    _addResults = merged.slice(0, 20);
+    renderAddResults();
+    setAddStatus(_addResults.length ? 'Pick the correct result to add.' : 'No results.');
+  } catch (e) {
+    console.error(e);
+    setAddStatus('Search failed.');
+  }
+}
+
+async function tmdbSearch(kind, q) {
+  const url = `https://api.themoviedb.org/3/search/${kind}?api_key=${TMDB_KEY}&query=${encodeURIComponent(q)}&page=1&include_adult=false`;
+  const data = await fetch(url).then(r=>r.json());
+  const results = (data.results || []).slice(0, 10);
+  return results.map(r => {
+    const title = kind === 'movie' ? (r.title || r.original_title || '') : (r.name || r.original_name || '');
+    const date  = kind === 'movie' ? (r.release_date || '') : (r.first_air_date || '');
+    const year  = date ? date.slice(0,4) : '';
+    return {
+      id: r.id,
+      title,
+      year,
+      popularity: r.popularity || 0,
+    };
+  }).filter(r => r.title);
+}
+
+function renderAddResults() {
+  const wrap = document.getElementById('add-results');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!_addResults.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+
+  _addResults.forEach(r => {
+    const row = document.createElement('div');
+    row.className = 'add-res';
+    row.onclick = () => addPickedResult(r);
+    const pill = document.createElement('span');
+    pill.className = 'pill ' + (r._type === 'movie' ? 'movie' : 'tv');
+    pill.textContent = r._type === 'movie' ? 'Movie' : 'TV';
+    const main = document.createElement('div');
+    main.style.flex = '1';
+    main.innerHTML = `<div class="t">${esc(r.title)}</div><div class="m">${esc(r.year || '—')} • TMDb #${r.id}</div>`;
+    row.appendChild(pill);
+    row.appendChild(main);
+    wrap.appendChild(row);
+  });
+}
+
+function isDuplicateByTmdb(type, tmdbId) {
+  const id = String(tmdbId || '').trim();
+  if (!id) return false;
+  return allItems.some(i => i._type === type && String(i.tmdbId || '').trim() === id);
+}
+
+function fmtDateYYYYMMDD(d = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+async function addPickedResult(r) {
+  if (!ensureSheetId()) return;
+  if (!accessToken) return;
+  if (isDuplicateByTmdb(r._type, r.id)) {
+    setAddStatus('Already in your library (same TMDb ID).');
+    return;
+  }
+  setAddStatus('Fetching details…');
+
+  try {
+    const details = await tmdbDetails(r._type, r.id);
+    const sheetName = r._type === 'movie' ? 'Movies' : 'TV Shows';
+    const today = fmtDateYYYYMMDD();
+
+    const rowValues = (r._type === 'movie')
+      ? buildMovieRow(details, today)
+      : buildTVRow(details, today);
+
+    setAddStatus('Adding to sheet…');
+    const appended = await appendRow(sheetName, rowValues);
+
+    // Apply watchlist formatting to the appended row (optional; safe if fails)
+    try {
+      const addedItem = appendedToItem(r._type, details.title, details.year, appended.updatedRow);
+      if (addedItem) await applyFormatting(addedItem, 'WATCHLIST', FMT_LIST_YES);
+    } catch (e) {}
+
+    setAddStatus('Added! Refreshing…');
+    await loadSheetData();
+    closeAddModal();
+  } catch (e) {
+    console.error(e);
+    setAddStatus('Failed to add.');
+  }
+}
+
+function buildMovieRow(d, today) {
+  // Movies: 19 columns (A..S)
+  return [
+    d.title,
+    d.year,
+    '',
+    '',
+    '',
+    '',
+    d.release || '',
+    d.runtime || '',
+    d.country || '',
+    d.language || '',
+    'Yes', // watchlist
+    '',
+    '',
+    '',
+    '',
+    d.poster || '',
+    String(d.tmdbId || ''),
+    d.imdbId || '',
+    today,
+  ];
+}
+
+function buildTVRow(d, today) {
+  // TV Shows: 21 columns (A..U)
+  return [
+    d.title,
+    d.year,
+    '',
+    '',
+    '',
+    '',
+    d.release || '',
+    d.runtime || '',
+    d.country || '',
+    d.language || '',
+    'Yes', // watchlist
+    '',
+    '',
+    '',
+    '',
+    '', // seasons collected
+    '', // seasons watched
+    d.poster || '',
+    String(d.tmdbId || ''),
+    d.imdbId || '',
+    today,
+  ];
+}
+
+async function tmdbDetails(type, id) {
+  const kind = type === 'movie' ? 'movie' : 'tv';
+  const url = `https://api.themoviedb.org/3/${kind}/${id}?api_key=${TMDB_KEY}`;
+  const data = await fetch(url).then(r=>r.json());
+
+  let imdbId = '';
+  if (type === 'movie') {
+    imdbId = data.imdb_id || '';
+  } else {
+    try {
+      const ex = await fetch(`https://api.themoviedb.org/3/tv/${id}/external_ids?api_key=${TMDB_KEY}`).then(r=>r.json());
+      imdbId = ex.imdb_id || '';
+    } catch (e) {}
+  }
+
+  const title = type === 'movie' ? (data.title || data.original_title || '') : (data.name || data.original_name || '');
+  const rel   = type === 'movie' ? (data.release_date || '') : (data.first_air_date || '');
+  const year  = rel ? rel.slice(0,4) : '';
+
+  let country = '';
+  if (type === 'movie' && (data.production_countries || []).length) country = data.production_countries[0].name || '';
+  if (type === 'tv' && (data.origin_country || []).length) country = displayRegion(data.origin_country[0]);
+
+  const language = data.original_language ? displayLanguage(data.original_language) : '';
+  let runtime = '';
+  if (type === 'movie' && data.runtime) runtime = data.runtime;
+  if (type === 'tv' && (data.episode_run_time || []).length) runtime = data.episode_run_time[0];
+
+  const poster = data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : '';
+  return { tmdbId:id, imdbId, title, year, release:rel, runtime, country, language, poster };
+}
+
+async function appendRow(sheetName, values) {
+  const range = sheetName === 'Movies' ? 'Movies!A:S' : 'TV Shows!A:U';
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ values:[values] }),
+  });
+  const d = await r.json();
+  const updatedRange = d.updates?.updatedRange || '';
+  const updatedRow = parseUpdatedRow(updatedRange);
+  return { updatedRange, updatedRow };
+}
+
+function parseUpdatedRow(a1Range) {
+  // e.g. "Movies!A5321:S5321"
+  const m = String(a1Range||'').match(/!(?:[A-Z]+)(\d+):/i);
+  return m ? parseInt(m[1]) : null;
+}
+
+function appendedToItem(type, title, year, rowNum) {
+  if (!rowNum) return null;
+  return {
+    _row: rowNum,
+    _type: type,
+    _sheet: type === 'movie' ? 'Movies' : 'TV Shows',
+    title: title || '',
+    year: year || '',
+    rating:'', watched:'', lastWatched:'', times:'',
+    release:'', runtime:'', country:'', language:'',
+    watchlist:'Yes', list1001:'', list1001d:'', holly:'',
+    collection:'',
+    seasons:'', seasonsWatched:'',
+    poster:'', tmdbId:'', imdbId:'', dateAdded:'',
+  };
 }
 
 function parseWatchedSeasons(str) {
