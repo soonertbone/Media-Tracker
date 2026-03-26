@@ -58,9 +58,16 @@
   .no-poster { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--muted); font-size:10px; text-align:center; padding:12px; line-height:1.4; }
   .no-poster svg { opacity:.3; }
 
-  /* Rating pill */
-  .rating-pill { position:absolute; top:6px; right:6px; background:rgba(12,12,15,.85); backdrop-filter:blur(6px); border:1px solid var(--border); border-radius:20px; padding:2px 7px; font-size:11px; font-weight:500; color:var(--accent); cursor:pointer; transition:background .15s; z-index:3; }
-  .rating-pill:hover { background:rgba(232,201,126,.15); }
+  /* Rating corner cutout */
+  .rating-pill {
+    position:absolute; top:0; right:0; width:48px; height:48px;
+    display:flex; align-items:flex-start; justify-content:flex-end;
+    clip-path:polygon(0 0, 100% 0, 100% 100%);
+    background:#d64040; color:#fff; cursor:pointer; transition:filter .15s;
+    z-index:3; font-size:11px; font-weight:700; line-height:1;
+    padding:7px 6px 0 0; border-top-right-radius:var(--radius);
+  }
+  .rating-pill:hover { filter:brightness(1.08); }
   .rating-pill.empty { color:var(--muted); }
 
   /* Change poster btn */
@@ -91,6 +98,10 @@
   /* Keep hover neutral unless illuminated by lists */
   .act-list:hover { background:#323245; color:#a7a7c8; border-color:#45455e; }
   .act-list.on-list:hover { background:#1677c8; color:#fff; border-color:rgba(0,0,0,0.25); }
+  .act-review { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
+  .act-review.has-review { background:#e0713f; color:#fff; border-color:rgba(0,0,0,0.25); }
+  .act-review:hover { background:#323245; color:#a7a7c8; border-color:#45455e; }
+  .act-review.has-review:hover { background:#cf6334; color:#fff; border-color:rgba(0,0,0,0.25); }
 
   /* Popups */
   .popup { position:absolute; bottom:36px; background:#1e1e28; border:1px solid var(--border); border-radius:var(--radius); padding:10px; z-index:100; display:none; box-shadow:0 8px 32px rgba(0,0,0,.6); }
@@ -277,6 +288,7 @@
         <select id="f-list" onchange="applyFilters(true)">
           <option value="">Any</option>
           <option value="watchlist">Watchlist</option>
+          <option value="not-watchlist">Not on watchlist</option>
           <option value="list1001">1001 List</option>
           <option value="list1001d">1001 w/Deletions</option>
           <option value="holly">Watch with Holly</option>
@@ -355,9 +367,28 @@
     <h3>Log a watch</h3>
     <p id="date-modal-title"></p>
     <input type="date" id="date-input" class="modal-input">
+    <select id="date-rating-input" class="modal-input" style="margin-top:8px">
+      <option value="">Add rating (optional)</option>
+      <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+      <option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option>
+    </select>
     <div class="modal-actions">
       <button class="modal-btn btn-confirm" onclick="confirmWatch()">Save</button>
       <button class="modal-btn btn-cancel"  onclick="cancelWatch()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review modal -->
+<div class="modal-overlay" id="review-modal">
+  <div class="modal-box" style="width:520px;text-align:left">
+    <h3 style="text-align:center">Reviews</h3>
+    <p id="review-modal-title" style="text-align:center"></p>
+    <div id="review-history" style="max-height:220px;overflow:auto;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;color:var(--muted);line-height:1.5"></div>
+    <textarea id="review-input" class="modal-input" style="margin-top:10px;min-height:92px;resize:vertical" placeholder="Write a new review..."></textarea>
+    <div class="modal-actions">
+      <button class="modal-btn btn-confirm" onclick="confirmReview()">Save review</button>
+      <button class="modal-btn btn-cancel"  onclick="cancelReview()">Cancel</button>
     </div>
   </div>
 </div>
@@ -415,8 +446,8 @@ const SCOPES    = 'https://www.googleapis.com/auth/spreadsheets';
 const TMDB_KEY  = 'a746e092fa14f46f1abdbca19e11d8b7';
 
 // ── Column maps (0-based) ────────────────────────────────────
-const MC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,POSTER:15,TMDB_ID:16,IMDB_ID:17,DATE_ADDED:18};
-const TC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,SEASONS:15,SEASONS_WATCHED:16,POSTER:17,TMDB_ID:18,IMDB_ID:19,DATE_ADDED:20};
+const MC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,POSTER:15,TMDB_ID:16,IMDB_ID:17,DATE_ADDED:18,REVIEWS:19};
+const TC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,RUNTIME:7,COUNTRY:8,LANGUAGE:9,WATCHLIST:10,LIST_1001:11,LIST_1001_D:12,HOLLY:13,COLLECTION:14,SEASONS:15,SEASONS_WATCHED:16,POSTER:17,TMDB_ID:18,IMDB_ID:19,DATE_ADDED:20,REVIEWS:21};
 
 // Formatting constants matching the spreadsheet
 const FMT_CENTER = { horizontalAlignment: 'CENTER' };
@@ -427,6 +458,7 @@ let tokenClient, accessToken;
 let allItems = [], filtered = [];
 let curType  = 'all';
 let pendingWatch = null;
+let pendingReview = null;
 let openPopup    = null;
 let interactiveLogin = false;
 
@@ -616,6 +648,7 @@ function rowToItem(row, cols, type, rowNum) {
     seasonsWatched: type==='tv' ? r(row[cols.SEASONS_WATCHED]) : '',
     poster:     r(row[cols.POSTER]),
     tmdbId:     r(row[cols.TMDB_ID]),
+    reviews:    r(row[cols.REVIEWS]),
   };
 }
 
@@ -701,11 +734,17 @@ function populateDropdowns() {
   const cSel=document.getElementById('f-country'), lSel=document.getElementById('f-lang');
   cos.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;cSel.appendChild(o);});
   las.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;lSel.appendChild(o);});
+  if (window._pendingFilterRestore) {
+    if (window._pendingFilterRestore.country) cSel.value = window._pendingFilterRestore.country;
+    if (window._pendingFilterRestore.lang) lSel.value = window._pendingFilterRestore.lang;
+    window._pendingFilterRestore = null;
+  }
 }
 
 function setType(t) {
   curType=t;
   ['all','movies','tv'].forEach(id=>document.getElementById('tb-'+id).classList.toggle('active',id===t));
+  saveFilterPrefs();
   applyFilters();
 }
 
@@ -734,6 +773,7 @@ function applyFilters(fromFilterChange) {
   const fco = document.getElementById('f-country').value;
   const fla = document.getElementById('f-lang').value;
   const srt = document.getElementById('f-sort').value;
+  saveFilterPrefs();
 
   filtered = allItems.filter(i => {
     if (curType!=='all' && i._type!==curType) return false;
@@ -752,6 +792,7 @@ function applyFilters(fromFilterChange) {
     const onAny = i.watchlist.toLowerCase()==='yes' || i.list1001.toLowerCase()==='yes' ||
                   i.list1001d.toLowerCase()==='yes' || i.holly.toLowerCase()==='yes';
     if (fl==='watchlist' && i.watchlist.toLowerCase()!=='yes') return false;
+    if (fl==='not-watchlist' && i.watchlist.toLowerCase()==='yes') return false;
     if (fl==='list1001'  && i.list1001.toLowerCase()!=='yes')  return false;
     if (fl==='list1001d' && i.list1001d.toLowerCase()!=='yes') return false;
     if (fl==='holly'     && i.holly.toLowerCase()!=='yes')     return false;
@@ -937,9 +978,12 @@ function makeCard(item) {
   bC.onclick=()=>toggleCollect(item,bC,pw);
   const onAnyList = ['watchlist','list1001','list1001d','holly'].some(k=>item[k].toLowerCase()==='yes');
   const bL=actBtn('act-list'+(onAnyList?' on-list':''),'≡','Lists');
+  const hasReview = !!String(item.reviews || '').trim();
+  const bR=actBtn('act-review'+(hasReview?' has-review':''),'✎','Reviews');
+  bR.onclick=()=>openReviewModal(item,bR);
   const lpop=makeListPopup(item);
   bL.onclick=e=>{e.stopPropagation();togglePopup(lpop);};
-  acts.appendChild(bW); acts.appendChild(bC); acts.appendChild(bL); acts.appendChild(lpop);
+  acts.appendChild(bW); acts.appendChild(bC); acts.appendChild(bL); acts.appendChild(bR); acts.appendChild(lpop);
   card.appendChild(acts);
 
   document.addEventListener('click',()=>{lpop.classList.remove('vis');rpop.classList.remove('vis');});
@@ -1037,6 +1081,8 @@ function logWatch(item, btn, pw) {
     pendingWatch = {item, btn, pw};
     document.getElementById('date-modal-title').textContent = item.title;
     document.getElementById('date-input').valueAsDate = new Date();
+    const rs = document.getElementById('date-rating-input');
+    if (rs) rs.value = item.rating || '';
     document.getElementById('date-modal').classList.add('vis');
   }
 }
@@ -1046,9 +1092,11 @@ function confirmWatch() {
   if (!pendingWatch) return;
   const {item,btn,pw} = pendingWatch;
   const d = document.getElementById('date-input').value;
+  const ratingVal = document.getElementById('date-rating-input').value;
   item.watched = 'Yes';
   item.lastWatched = d;
   item.times = (parseInt(item.times)||0) + 1;
+  if (ratingVal) item.rating = ratingVal;
   btn.classList.add('on');
   btn.title = 'Log another watch';
   document.getElementById('date-modal').classList.remove('vis');
@@ -1058,6 +1106,7 @@ function confirmWatch() {
     {col:'LAST_WATCHED',val:d},
     {col:'TIMES',val:item.times},
   ];
+  if (ratingVal) updates.push({col:'RATING',val:ratingVal});
   if (item.watchlist.toLowerCase() === 'yes') {
     item.watchlist = '';
     updates.push({col:'WATCHLIST', val:''});
@@ -1077,6 +1126,23 @@ async function openTVWatchModal(item, btn, pw) {
   pendingTVWatch = {item, btn, pw};
   document.getElementById('tv-modal-title').textContent = item.title;
   document.getElementById('tv-date-input').valueAsDate = new Date();
+  let tvRating = document.getElementById('tv-rating-input');
+  if (!tvRating) {
+    const box = document.querySelector('#tv-watch-modal .modal-box');
+    const wrap = document.createElement('div');
+    wrap.style.marginTop = '10px';
+    wrap.innerHTML = `
+      <span class="fl">Rating</span>
+      <select id="tv-rating-input" class="modal-input" style="margin-top:6px">
+        <option value="">Add rating (optional)</option>
+        <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+        <option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option>
+      </select>`;
+    const actions = box.querySelector('.modal-actions');
+    box.insertBefore(wrap, actions);
+    tvRating = wrap.querySelector('#tv-rating-input');
+  }
+  tvRating.value = item.rating || '';
   document.getElementById('dropped-cb').checked = item.watched === 'Dropped';
   document.getElementById('tv-watch-modal').classList.add('vis');
 
@@ -1133,6 +1199,7 @@ async function confirmTVWatch() {
   const {item, btn, pw} = pendingTVWatch;
   const d       = document.getElementById('tv-date-input').value;
   const dropped = document.getElementById('dropped-cb').checked;
+  const ratingVal = document.getElementById('tv-rating-input')?.value || '';
 
   const checkedSeasons = [...document.querySelectorAll('.season-cb:checked')].map(cb=>parseInt(cb.value));
   const totalSeasons   = document.querySelectorAll('.season-cb').length;
@@ -1156,6 +1223,7 @@ async function confirmTVWatch() {
   item.watched        = dropped ? 'Dropped' : (merged.length > 0 ? 'Yes' : '');
   item.lastWatched    = d || item.lastWatched;
   item.times          = (parseInt(item.times)||0) + (checkedSeasons.length > 0 || dropped ? 1 : 0);
+  if (ratingVal) item.rating = ratingVal;
 
   // Update watch button appearance
   updateTVWatchBtn(btn, item, totalSeasons || tmdbSeasonCache[item.tmdbId] || 0);
@@ -1169,6 +1237,7 @@ async function confirmTVWatch() {
     {col:'LAST_WATCHED',    val:item.lastWatched},
     {col:'TIMES',           val:item.times},
   ];
+  if (ratingVal) updates.push({col:'RATING', val:ratingVal});
   if (item.watchlist.toLowerCase() === 'yes' && item.watched === 'Yes') {
     item.watchlist = '';
     updates.push({col:'WATCHLIST', val:''});
@@ -1179,6 +1248,48 @@ async function confirmTVWatch() {
 function cancelTVWatch() {
   document.getElementById('tv-watch-modal').classList.remove('vis');
   pendingTVWatch = null;
+}
+
+function openReviewModal(item, buttonEl) {
+  pendingReview = { item, buttonEl };
+  document.getElementById('review-modal-title').textContent = item.title;
+  const history = document.getElementById('review-history');
+  const entries = parseReviewEntries(item.reviews);
+  history.innerHTML = entries.length
+    ? entries.map(e => `<div style="margin-bottom:8px"><div style="font-size:10px;color:var(--muted)">${esc(e.date)}</div><div style="color:var(--text)">${esc(e.text)}</div></div>`).join('')
+    : '<div>No reviews yet.</div>';
+  document.getElementById('review-input').value = '';
+  document.getElementById('review-modal').classList.add('vis');
+}
+
+function parseReviewEntries(raw) {
+  return String(raw || '')
+    .split('\n---\n')
+    .map(x => x.trim())
+    .filter(Boolean)
+    .map(chunk => {
+      const m = chunk.match(/^\[(.*?)\]\s*([\s\S]*)$/);
+      if (!m) return { date: 'Unknown date', text: chunk };
+      return { date: m[1], text: m[2].trim() };
+    });
+}
+
+function confirmReview() {
+  if (!pendingReview) return;
+  const { item, buttonEl } = pendingReview;
+  const txt = (document.getElementById('review-input').value || '').trim();
+  if (!txt) { cancelReview(); return; }
+  const stamp = fmtDateYYYYMMDD();
+  const entry = `[${stamp}] ${txt}`;
+  item.reviews = item.reviews ? `${item.reviews}\n---\n${entry}` : entry;
+  updateCells(item,[{col:'REVIEWS',val:item.reviews}]);
+  if (buttonEl) buttonEl.classList.add('has-review');
+  cancelReview();
+}
+
+function cancelReview() {
+  document.getElementById('review-modal').classList.remove('vis');
+  pendingReview = null;
 }
 
 // ── Add title (TMDb search → append to sheet) ─────────────────
@@ -1369,7 +1480,7 @@ async function addPickedResult(r) {
 }
 
 function buildMovieRow(d, today) {
-  // Movies: 19 columns (A..S)
+  // Movies: 20 columns (A..T)
   return [
     d.title,
     d.year,
@@ -1390,11 +1501,12 @@ function buildMovieRow(d, today) {
     String(d.tmdbId || ''),
     d.imdbId || '',
     today,
+    '',
   ];
 }
 
 function buildTVRow(d, today) {
-  // TV Shows: 21 columns (A..U)
+  // TV Shows: 22 columns (A..V)
   return [
     d.title,
     d.year,
@@ -1417,6 +1529,7 @@ function buildTVRow(d, today) {
     String(d.tmdbId || ''),
     d.imdbId || '',
     today,
+    '',
   ];
 }
 
@@ -1453,7 +1566,7 @@ async function tmdbDetails(type, id) {
 }
 
 async function appendRow(sheetName, values) {
-  const range = sheetName === 'Movies' ? 'Movies!A:S' : 'TV Shows!A:U';
+  const range = sheetName === 'Movies' ? 'Movies!A:T' : 'TV Shows!A:V';
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
   const r = await fetch(url, {
     method:'POST',
@@ -1485,7 +1598,7 @@ function appendedToItem(type, title, year, rowNum) {
     watchlist:'Yes', list1001:'', list1001d:'', holly:'',
     collection:'',
     seasons:'', seasonsWatched:'',
-    poster:'', tmdbId:'', imdbId:'', dateAdded:'',
+    poster:'', tmdbId:'', imdbId:'', dateAdded:'', reviews:'',
   };
 }
 
@@ -1884,6 +1997,46 @@ function recallSort() {
   } catch(e) {}
 }
 
+function saveFilterPrefs() {
+  try {
+    const payload = {
+      type: curType,
+      search: document.getElementById('f-search')?.value || '',
+      watched: document.getElementById('f-watched')?.value || '',
+      collect: document.getElementById('f-collect')?.value || '',
+      list: document.getElementById('f-list')?.value || '',
+      y1: document.getElementById('f-y1')?.value || '',
+      y2: document.getElementById('f-y2')?.value || '',
+      r1: document.getElementById('f-r1')?.value || '',
+      r2: document.getElementById('f-r2')?.value || '',
+      country: document.getElementById('f-country')?.value || '',
+      lang: document.getElementById('f-lang')?.value || '',
+      sort: document.getElementById('f-sort')?.value || 'title-asc',
+    };
+    localStorage.setItem('mv_filter_prefs', JSON.stringify(payload));
+  } catch (e) {}
+}
+
+function restoreFilterPrefs() {
+  try {
+    const raw = localStorage.getItem('mv_filter_prefs');
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p.type) curType = p.type;
+    ['all','movies','tv'].forEach(id=>document.getElementById('tb-'+id).classList.toggle('active',id===curType));
+    if (document.getElementById('f-search')) document.getElementById('f-search').value = p.search || '';
+    if (document.getElementById('f-watched')) document.getElementById('f-watched').value = p.watched || '';
+    if (document.getElementById('f-collect')) document.getElementById('f-collect').value = p.collect || '';
+    if (document.getElementById('f-list')) document.getElementById('f-list').value = p.list || '';
+    if (document.getElementById('f-y1')) document.getElementById('f-y1').value = p.y1 || '';
+    if (document.getElementById('f-y2')) document.getElementById('f-y2').value = p.y2 || '';
+    if (document.getElementById('f-r1')) document.getElementById('f-r1').value = p.r1 || '';
+    if (document.getElementById('f-r2')) document.getElementById('f-r2').value = p.r2 || '';
+    if (document.getElementById('f-sort')) document.getElementById('f-sort').value = p.sort || 'title-asc';
+    window._pendingFilterRestore = { country: p.country || '', lang: p.lang || '' };
+  } catch (e) {}
+}
+
 // ── Large targets toggle ──────────────────────────────────────
 function toggleLargeTargets() {
   const active = document.body.classList.toggle('large-targets');
@@ -1909,6 +2062,7 @@ showApp = function() {
   window._origShowApp();
   setupInfiniteScroll();
   restoreLargeTargets();
+  restoreFilterPrefs();
 };
 
 loadGIS();
