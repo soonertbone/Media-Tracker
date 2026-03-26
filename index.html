@@ -80,8 +80,10 @@
   .act-watch        { background:rgba(85,51,170,0.25); color:rgba(136,102,204,0.5); border:1px solid rgba(85,51,170,0.3); }
   .act-watch.on     { background:#5533aa; color:#fff; border-color:#7744dd; }
   /* Green (collection) */
-  .act-collect { background:#12a58b; color:#fff; border:1px solid rgba(0,0,0,0.15); }
+  .act-collect { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
   .act-collect.on { background:#12a58b; color:#fff; border-color:rgba(0,0,0,0.25); }
+  .act-collect:hover { background:#323245; color:#a7a7c8; border-color:#45455e; }
+  .act-collect.on:hover { background:#0f927b; color:#fff; border-color:rgba(0,0,0,0.25); }
 
   /* Blue (lists) */
   .act-list { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
@@ -387,6 +389,7 @@ let allItems = [], filtered = [];
 let curType  = 'all';
 let pendingWatch = null;
 let openPopup    = null;
+let interactiveLogin = false;
 
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
@@ -404,26 +407,45 @@ function initGIS() {
   });
 
   // Try to restore saved token
-  const saved = sessionStorage.getItem('mv_token');
-  const expiry = parseInt(sessionStorage.getItem('mv_token_expiry') || '0');
+  const saved = localStorage.getItem('mv_token') || sessionStorage.getItem('mv_token');
+  const expiry = parseInt(localStorage.getItem('mv_token_expiry') || sessionStorage.getItem('mv_token_expiry') || '0');
   if (saved && Date.now() < expiry) {
     accessToken = saved;
     showApp();
+    return;
   }
+
+  // Attempt silent sign-in (won't work if user needs interaction)
+  try {
+    setTimeout(() => tokenClient.requestAccessToken({ prompt: '' }), 50);
+  } catch (e) {}
 }
 
-function signIn() { tokenClient.requestAccessToken(); }
+function signIn() {
+  interactiveLogin = true;
+  tokenClient.requestAccessToken();
+}
 
 function onToken(resp) {
   if (resp.error) {
-    document.getElementById('auth-error').textContent = 'Sign-in failed: ' + resp.error;
-    document.getElementById('auth-error').style.display = 'block';
+    // Silent attempts can fail without requiring user-visible errors.
+    if (interactiveLogin) {
+      document.getElementById('auth-error').textContent = 'Sign-in failed: ' + resp.error;
+      document.getElementById('auth-error').style.display = 'block';
+    }
+    interactiveLogin = false;
     return;
   }
   accessToken = resp.access_token;
   // Store token for the session + 55 min (tokens last ~1hr)
+  const exp = Date.now() + 55 * 60 * 1000;
+  try {
+    localStorage.setItem('mv_token', accessToken);
+    localStorage.setItem('mv_token_expiry', String(exp));
+  } catch (e) {}
   sessionStorage.setItem('mv_token', accessToken);
-  sessionStorage.setItem('mv_token_expiry', Date.now() + 55 * 60 * 1000);
+  sessionStorage.setItem('mv_token_expiry', exp);
+  interactiveLogin = false;
   showApp();
 }
 
