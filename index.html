@@ -137,12 +137,17 @@
   .add-res { display:flex; gap:10px; align-items:center; padding:10px 12px; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.06); }
   .add-res:last-child { border-bottom:none; }
   .add-res:hover { background:rgba(232,201,126,0.08); }
+  .add-thumb { width:34px; height:51px; border-radius:6px; object-fit:cover; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08); flex-shrink:0; }
+  .add-thumb.ph { display:flex; align-items:center; justify-content:center; color:rgba(255,255,255,0.25); font-size:10px; font-weight:600; }
   .add-res .t { font-weight:500; font-size:13px; }
   .add-res .m { font-size:11px; color:var(--muted); margin-top:2px; }
   .pill { font-size:10px; padding:2px 6px; border-radius:999px; border:1px solid rgba(255,255,255,0.14); color:#fff; background:rgba(255,255,255,0.06); flex-shrink:0; }
   .pill.movie { border-color:rgba(232,201,126,0.35); color:var(--accent); background:rgba(232,201,126,0.10); }
   .pill.tv    { border-color:rgba(126,158,232,0.35); color:var(--accent2); background:rgba(126,158,232,0.10); }
   .add-status { margin-top:10px; font-size:12px; color:var(--muted); text-align:center; min-height:16px; }
+
+  /* Poster link overlay (movies) */
+  .poster-link { position:absolute; inset:0; z-index:1; }
 
   /* TV Season Modal */
   #tv-watch-modal .modal-box { width:380px; }
@@ -882,6 +887,17 @@ function makeCard(item) {
   const pw=document.createElement('div'); pw.className='poster-wrap';
   renderPoster(pw, item);
 
+  // Clickable TMDb link (movies only)
+  if (item._type === 'movie' && item.tmdbId) {
+    const a = document.createElement('a');
+    a.className = 'poster-link';
+    a.href = `https://www.themoviedb.org/movie/${encodeURIComponent(String(item.tmdbId))}`;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.title = 'Open on TMDb';
+    pw.appendChild(a);
+  }
+
   // Rating pill
   const rp=document.createElement('div');
   rp.className='rating-pill'+(item.rating?'':' empty');
@@ -1262,6 +1278,7 @@ async function tmdbSearch(kind, q) {
       title,
       year,
       popularity: r.popularity || 0,
+      poster_path: r.poster_path || '',
     };
   }).filter(r => r.title);
 }
@@ -1277,6 +1294,21 @@ function renderAddResults() {
     const row = document.createElement('div');
     row.className = 'add-res';
     row.onclick = () => addPickedResult(r);
+
+    if (r.poster_path) {
+      const img = document.createElement('img');
+      img.className = 'add-thumb';
+      img.alt = '';
+      img.loading = 'lazy';
+      img.src = `https://image.tmdb.org/t/p/w92${r.poster_path}`;
+      row.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.className = 'add-thumb ph';
+      ph.textContent = '—';
+      row.appendChild(ph);
+    }
+
     const pill = document.createElement('span');
     pill.className = 'pill ' + (r._type === 'movie' ? 'movie' : 'tv');
     pill.textContent = r._type === 'movie' ? 'Movie' : 'TV';
@@ -1869,87 +1901,14 @@ function restoreLargeTargets() {
   } catch(e) {}
 }
 
-// ── TV Poster Debug ──────────────────────────────────────────
-function debugTVPosters() {
-  const tvItems = allItems.filter(i => i._type === 'tv');
-  const withPoster = tvItems.filter(i => i.poster);
-  const sample = tvItems.slice(0, 3);
-
-  let msg = `TV items: ${tvItems.length}\n`;
-  msg += `With poster: ${withPoster.length}\n\n`;
-  msg += `First 3 TV items:\n`;
-  sample.forEach(i => {
-    msg += `  ${i.title}: poster="${i.poster ? i.poster.substring(0,40)+'...' : 'EMPTY'}"\n`;
-    msg += `    _row=${i._row}, tmdbId="${i.tmdbId}"\n`;
-  });
-
-  // Also show raw sheet data for first TV row
-  fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('TV Shows')}!A2:V2`, {
-    headers: { Authorization: 'Bearer ' + accessToken }
-  }).then(r => r.json()).then(d => {
-    const row = (d.values || [[]])[0];
-    msg += `\nRaw row 2 from sheet (${row.length} cols):\n`;
-    row.forEach((v, i) => msg += `  [${i}]: ${String(v).substring(0, 40)}\n`);
-
-    const div = document.createElement('div');
-    div.style.cssText = 'position:fixed;inset:20px;background:#1a1a2e;color:#eee;padding:20px;border-radius:10px;overflow:auto;z-index:9999;font-size:11px;font-family:monospace;border:1px solid #444;white-space:pre';
-    div.textContent = msg;
-    const close = document.createElement('button');
-    close.textContent = '✕ Close';
-    close.style.cssText = 'position:absolute;top:10px;right:10px;background:#444;border:none;color:#eee;padding:6px 12px;border-radius:5px;cursor:pointer;';
-    close.onclick = () => div.remove();
-    div.appendChild(close);
-    document.body.appendChild(div);
-  });
-}
-
 // ── Boot ─────────────────────────────────────────────────────
 
-// Debug: show poster status in console and on page
-function debugPosters() {
-  const withPoster = allItems.filter(i => i.poster);
-  const sample = withPoster.slice(0, 3);
-  console.log('Total items:', allItems.length);
-  console.log('Items with poster URL:', withPoster.length);
-  sample.forEach(i => console.log(i.title, '->', i.poster));
-
-  // Try loading a poster URL directly
-  if (sample.length) {
-    const testImg = new Image();
-    testImg.onload  = () => console.log('✅ Test image loaded OK:', sample[0].poster);
-    testImg.onerror = (e) => console.log('❌ Test image FAILED:', sample[0].poster, e);
-    testImg.src = sample[0].poster;
-  }
-
-  // Show overlay on page
-  const div = document.createElement('div');
-  div.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#222;color:#eee;padding:12px;border-radius:8px;font-size:12px;z-index:9999;max-width:340px;border:1px solid #444';
-  div.innerHTML = '<b>Debug info</b><br>' +
-    'Total items: ' + allItems.length + '<br>' +
-    'With poster URL: ' + withPoster.length + '<br>' +
-    'Sample URL: ' + (sample[0] ? '<a href="' + sample[0].poster + '" target="_blank" style="color:#e8c97e;word-break:break-all">' + sample[0].poster + '</a>' : 'none') +
-    '<br><button onclick="this.parentNode.remove()" style="margin-top:8px;background:#444;border:none;color:#eee;padding:4px 8px;border-radius:4px;cursor:pointer">Close</button>';
-  document.body.appendChild(div);
-}
-
-// Add debug button to header after app loads
+// Ensure infinite scroll + large-targets are always initialized.
 window._origShowApp = showApp;
 showApp = function() {
   window._origShowApp();
   setupInfiniteScroll();
   restoreLargeTargets();
-  setTimeout(() => {
-    const btn = document.createElement('button');
-    btn.textContent = '🔍 Debug';
-    btn.style.cssText = 'background:#333;border:1px solid #555;color:#eee;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:4px;';
-    btn.onclick = debugPosters;
-    const btn2 = document.createElement('button');
-    btn2.textContent = '📺 TV Debug';
-    btn2.style.cssText = 'background:#333;border:1px solid #555;color:#eee;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:4px;';
-    btn2.onclick = debugTVPosters;
-    document.getElementById('header').appendChild(btn2);
-    document.getElementById('header').appendChild(btn);
-  }, 2000);
 };
 
 loadGIS();
