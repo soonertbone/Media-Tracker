@@ -63,12 +63,12 @@
     position:absolute; top:0; right:0; width:48px; height:48px;
     display:flex; align-items:flex-start; justify-content:flex-end;
     clip-path:polygon(0 0, 100% 0, 100% 100%);
-    background:#d64040; color:#fff; cursor:pointer; transition:filter .15s;
+    background:#7a2a2f; color:#f4e7e7; cursor:pointer; transition:filter .15s;
     z-index:3; font-size:11px; font-weight:700; line-height:1;
     padding:7px 6px 0 0; border-top-right-radius:var(--radius);
   }
   .rating-pill:hover { filter:brightness(1.08); }
-  .rating-pill.empty { color:var(--muted); }
+  .rating-pill.empty { display:none; }
 
   /* Change poster btn */
   .change-poster-btn { position:absolute; bottom:6px; right:6px; background:rgba(12,12,15,.8); backdrop-filter:blur(4px); border:1px solid var(--border); border-radius:6px; color:var(--muted); font-size:10px; padding:3px 6px; cursor:pointer; opacity:0; transition:opacity .2s; z-index:3; white-space:nowrap; }
@@ -81,9 +81,14 @@
   .card-meta { font-size:10px; color:var(--muted); margin-top:2px; }
 
   /* Actions */
-  .card-actions { display:flex; align-items:center; padding:3px 6px 7px; gap:4px; position:relative; }
-  .act { width:26px; height:26px; border-radius:50%; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; transition:transform .12s,background .15s; flex-shrink:0; }
-  .act:hover { transform:scale(1.2); }
+  .card-actions { display:flex; align-items:stretch; padding:4px 6px 8px; gap:0; position:relative; width:100%; overflow:hidden; }
+  .act {
+    flex:1 1 0; min-width:0; height:26px; border-radius:0; border:1px solid transparent;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px;
+    transition:background .15s,color .15s,border-color .15s; flex-shrink:1;
+  }
+  .card-actions .act:first-child { border-radius:7px 0 0 7px; }
+  .card-actions .act:last-child  { border-radius:0 7px 7px 0; }
   .act-watch        { background:rgba(85,51,170,0.25); color:rgba(136,102,204,0.5); border:1px solid rgba(85,51,170,0.3); }
   .act-watch.on     { background:#5533aa; color:#fff; border-color:#7744dd; }
   /* Green (collection) */
@@ -186,8 +191,8 @@
   .act-watch { transition:background .15s, color .15s, opacity .15s, border-color .15s; }
 
   /* Large target mode (Vision Pro) */
-  body.large-targets .act { width:42px; height:42px; font-size:16px; }
-  body.large-targets .card-actions { gap:8px; padding:6px 8px 10px; }
+  body.large-targets .act { width:auto; height:34px; font-size:14px; }
+  body.large-targets .card-actions { gap:0; padding:6px 6px 10px; width:100%; overflow:hidden; }
   body.large-targets .rating-pill { font-size:13px; padding:4px 10px; }
   body.large-targets .change-poster-btn { font-size:12px; padding:5px 10px; opacity:1; }
   body.large-targets #grid { grid-template-columns:repeat(auto-fill,minmax(175px,1fr)); gap:18px; }
@@ -941,7 +946,8 @@ function makeCard(item) {
 
   // Rating pill
   const rp=document.createElement('div');
-  rp.className='rating-pill'+(item.rating?'':' empty');
+  const hideUnratedMovie = item._type === 'movie' && !item.rating;
+  rp.className='rating-pill'+(hideUnratedMovie?' empty':'');
   rp.title='Set rating'; rp.textContent=item.rating||'·';
   const rpop=makeRatingPopup(item,rp);
   rp.onclick=e=>{e.stopPropagation();togglePopup(rpop);};
