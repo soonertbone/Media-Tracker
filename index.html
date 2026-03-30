@@ -707,12 +707,71 @@ function cleanVal(v) {
   return s;
 }
 
+// Google Sheets date serial: day 0 = 1899-12-30 (UTC). Writing a number avoids RAW text dates (leading ').
+function isoDateToSheetsSerial(iso) {
+  if (!iso || typeof iso !== 'string') return null;
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const utc = Date.UTC(y, mo - 1, d);
+  return (utc - Date.UTC(1899, 11, 30)) / 86400000;
+}
+
+function sheetsSerialToIso(serial) {
+  const whole = Math.floor(Number(serial));
+  if (!isFinite(whole)) return '';
+  const ms = Date.UTC(1899, 11, 30) + whole * 86400000;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function toIsoDateForLog(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number' && isFinite(v)) return sheetsSerialToIso(v);
+  const s = String(v).trim().replace(/^'+/, '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const parsed = Date.parse(s);
+  if (!isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  return '';
+}
+
+function sheetDateCellValue(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const iso = toIsoDateForLog(v);
+  if (iso) {
+    const serial = isoDateToSheetsSerial(iso);
+    if (serial != null) return serial;
+  }
+  return cleanVal(v);
+}
+
+// One row for "Watch Log": Date, Title, Year, Type, TMDB ID (matches Apps Script appendWatchLog).
+async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
+  const serial = isoDateToSheetsSerial(dateIso);
+  if (serial == null) return;
+  const yVal = year === '' || year == null ? '' : (typeof year === 'number' ? year : cleanVal(year));
+  const idVal = tmdbId === '' || tmdbId == null ? '' : cleanVal(tmdbId);
+  const row = [serial, String(title || ''), yVal, type, idVal];
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Watch Log!A:E')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ values:[row] }),
+  });
+  if (!r.ok) {
+    const err = await r.text();
+    console.error('appendWatchLogRow failed', r.status, err);
+  }
+}
+
 async function updateCells(item, updates) {
   const cols = item._type==='movie' ? MC : TC;
-  const data = updates.map(u => ({
-    range: `${item._sheet}!${colLetter(cols[u.col])}${item._row}`,
-    values: [[cleanVal(u.val)]],
-  }));
+  const data = updates.map(u => {
+    const val = u.col === 'LAST_WATCHED' ? sheetDateCellValue(u.val) : cleanVal(u.val);
+    return {
+      range: `${item._sheet}!${colLetter(cols[u.col])}${item._row}`,
+      values: [[val]],
+    };
+  });
   await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
     { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
@@ -1121,7 +1180,7 @@ function logWatch(item, btn, pw) {
 }
 
 // ── Movie watch confirm ───────────────────────────────────────
-function confirmWatch() {
+async function confirmWatch() {
   if (!pendingWatch) return;
   const {item,btn,pw} = pendingWatch;
   const d = document.getElementById('date-input').value;
@@ -1144,7 +1203,11 @@ function confirmWatch() {
     item.watchlist = '';
     updates.push({col:'WATCHLIST', val:''});
   }
-  updateCells(item, updates);
+  await updateCells(item, updates);
+  if (d) {
+    await appendWatchLogRow({ dateIso:d, title:item.title, year:item.year, type:'Movie', tmdbId:item.tmdbId });
+    loadWatchLog();
+  }
 }
 
 function cancelWatch() {
@@ -1275,7 +1338,15 @@ async function confirmTVWatch() {
     item.watchlist = '';
     updates.push({col:'WATCHLIST', val:''});
   }
-  updateCells(item, updates);
+  const timesIncremented = (checkedSeasons.length > 0 || dropped);
+  await updateCells(item, updates);
+  if (timesIncremented) {
+    const logIso = toIsoDateForLog(d || item.lastWatched);
+    if (logIso) {
+      await appendWatchLogRow({ dateIso:logIso, title:item.title, year:item.year, type:'TV Show', tmdbId:item.tmdbId });
+      loadWatchLog();
+    }
+  }
 }
 
 function cancelTVWatch() {
@@ -1766,18 +1837,32 @@ function showView(view) {
 // ── Stats ─────────────────────────────────────────────────────
 let watchLogData = [];
 
+function normalizeWatchLogDateCell(cell) {
+  if (cell === null || cell === undefined || cell === '') return '';
+  if (typeof cell === 'number' && isFinite(cell)) return sheetsSerialToIso(cell);
+  let s = String(cell).trim().replace(/^'+/, '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (/^-?\d+(\.\d+)?$/.test(s)) return sheetsSerialToIso(Number(s));
+  const parsed = Date.parse(s);
+  if (!isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  return '';
+}
+
 async function loadWatchLog() {
   try {
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Watch Log!A:E')}`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Watch Log!A:E')}?valueRenderOption=UNFORMATTED_VALUE`;
     const r   = await fetch(url, { headers:{ Authorization:'Bearer '+accessToken } });
     const d   = await r.json();
     const rows = (d.values || []).slice(1); // skip header
-    watchLogData = rows.map(r => ({
-      date:  r[0] || '',
-      title: r[1] || '',
-      year:  r[2] || '',
-      type:  r[3] || '', // 'Movie' or 'TV Show'
-    })).filter(r => r.date);
+    watchLogData = rows.map(row => {
+      const dateIso = normalizeWatchLogDateCell(row[0]);
+      return {
+        date:  dateIso,
+        title: row[1] != null ? String(row[1]).replace(/^'+/, '') : '',
+        year:  row[2] != null ? String(row[2]).replace(/^'+/, '') : '',
+        type:  row[3] != null ? String(row[3]).trim() : '', // 'Movie' or 'TV Show'
+      };
+    }).filter(entry => entry.date);
     console.log('Watch log loaded:', watchLogData.length, 'entries');
   } catch(e) {
     console.error('Failed to load watch log:', e);
