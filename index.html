@@ -746,12 +746,11 @@ function sheetDateCellValue(v) {
 
 // One row for "Watch Log": Date, Title, Year, Type, TMDB ID (matches Apps Script appendWatchLog).
 async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
-  const serial = isoDateToSheetsSerial(dateIso);
-  if (serial == null) return;
+  if (!dateIso) return;
   const yVal = year === '' || year == null ? '' : (typeof year === 'number' ? year : cleanVal(year));
   const idVal = tmdbId === '' || tmdbId == null ? '' : cleanVal(tmdbId);
-  const row = [serial, String(title || ''), yVal, type, idVal];
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Watch Log!A:E')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const row = [String(dateIso), String(title || ''), yVal, type, idVal];
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Watch Log!A:E')}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
   const r = await fetch(url, {
     method:'POST',
     headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
