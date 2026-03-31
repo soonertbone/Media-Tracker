@@ -205,6 +205,20 @@
     background:rgba(91,186,138,.2); color:var(--watched);
     border-color:var(--watched);
   }
+  /* Clickable season buttons (used in TV collection modal) */
+  .season-btn {
+    appearance:none;
+    display:flex; align-items:center; justify-content:center;
+    height:36px; border-radius:6px; font-size:13px; font-weight:500;
+    cursor:pointer; border:1px solid var(--border); background:var(--card);
+    color:var(--muted); transition:all .15s; user-select:none;
+    padding:0;
+  }
+  .season-btn:hover { border-color:rgba(255,255,255,0.22); color:var(--text); }
+  .season-btn.selected {
+    background:rgba(18,165,139,.22); color:#12a58b;
+    border-color:#12a58b;
+  }
   .dropped-toggle {
     display:flex; align-items:center; gap:8px; margin:10px 0;
     font-size:13px; cursor:pointer;
@@ -1388,15 +1402,13 @@ async function openTVCollectModal(item, btn, pw) {
         const grid = cbWrap.querySelector('.season-grid');
         seasons.forEach(s => {
           const n   = s.season_number;
-          const id  = 'ccb-' + n;
-          const inp = document.createElement('input');
-          inp.type = 'checkbox'; inp.className = 'season-cb-col';
-          inp.id = id; inp.value = n;
-          inp.checked = alreadyCollected.includes(n);
-          const lbl = document.createElement('label');
-          lbl.className = 'season-lbl'; lbl.htmlFor = id;
-          lbl.textContent = 'S' + n;
-          grid.appendChild(inp); grid.appendChild(lbl);
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'season-btn' + (alreadyCollected.includes(n) ? ' selected' : '');
+          b.dataset.season = String(n);
+          b.textContent = 'S' + n;
+          b.onclick = (e) => { e.preventDefault(); b.classList.toggle('selected'); };
+          grid.appendChild(b);
         });
       } else {
         cbWrap.innerHTML = '<p style="color:var(--muted);font-size:12px">No season data found on TMDb.</p>';
@@ -1413,8 +1425,8 @@ async function confirmTVCollect() {
   if (!pendingTVCollect) return;
   const { item, btn, pw } = pendingTVCollect;
 
-  const checked = [...document.querySelectorAll('#collect-season-checkboxes .season-cb-col:checked')]
-    .map(cb => parseInt(cb.value))
+  const checked = [...document.querySelectorAll('#collect-season-checkboxes .season-btn.selected')]
+    .map(b => parseInt(b.dataset.season))
     .filter(n => !isNaN(n))
     .sort((a,b)=>a-b);
 
