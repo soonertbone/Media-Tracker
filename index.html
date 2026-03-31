@@ -1094,6 +1094,10 @@ function makeCard(item) {
   }
   const bC=actBtn('act-collect'+(isC?' on':''),'⬡',isC?'In collection (click to remove)':'Add to collection');
   bC.onclick=()=>toggleCollect(item,bC,pw);
+  if (item._type === 'tv') {
+    const cachedTotal = tmdbSeasonCache[item.tmdbId];
+    if (cachedTotal) bC.title = tvCollectedTooltip(item, cachedTotal);
+  }
   const onAnyList = ['watchlist','list1001','list1001d','holly'].some(k=>item[k].toLowerCase()==='yes');
   const bL=actBtn('act-list'+(onAnyList?' on-list':''),'≡','Lists');
   const hasReview = !!String(item.reviews || '').trim();
@@ -1433,7 +1437,7 @@ async function confirmTVCollect() {
   item.collection = 'Yes';
   item.seasons = checked.join(', ');
   btn.classList.add('on');
-  btn.title = 'In collection (click to remove)';
+  btn.title = tvCollectedTooltip(item, tmdbSeasonCache[item.tmdbId] || document.querySelectorAll('#collect-season-checkboxes .season-btn').length || 0) || 'In collection (click to remove)';
 
   document.getElementById('tv-collect-modal').classList.remove('vis');
   pendingTVCollect = null;
@@ -2155,6 +2159,17 @@ function parseCollectedSeasons(seasonsStr) {
   return String(seasonsStr).split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
 }
 
+function tvCollectedTooltip(item, totalSeasons) {
+  if (!item || item._type !== 'tv') return '';
+  const total = parseInt(totalSeasons);
+  if (!total || total <= 0) return item.collection && item.collection.toLowerCase() === 'yes'
+    ? 'In collection — click to update'
+    : 'Add to collection';
+  const collected = parseCollectedSeasons(item.seasons).length;
+  const pct = Math.round((collected / total) * 100);
+  return `${collected} out of ${total} seasons collected (${pct}%)`;
+}
+
 async function updateSeasonBadge(item, card) {
   if (item._type !== 'tv') return;
   const latest = await checkTVSeasons(item);
@@ -2163,6 +2178,10 @@ async function updateSeasonBadge(item, card) {
   // Update watch button opacity now that we know total seasons
   const btn = card.querySelector('.act-watch');
   if (btn) updateTVWatchBtn(btn, item, latest);
+
+  // Update collect button tooltip once we know season count
+  const cbtn = card.querySelector('.act-collect');
+  if (cbtn) cbtn.title = tvCollectedTooltip(item, latest);
 
   // Collection incomplete badge
   if (item.collection && item.collection.toLowerCase() === 'yes') {
