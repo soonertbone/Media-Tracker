@@ -342,7 +342,6 @@
           <option value="tv-full">✅ Fully watched TV</option>
           <option value="tv-partial">〰️ Partially watched TV</option>
           <option value="tv-notstarted">⭕ Not started TV</option>
-          <option value="tv-behind">⏩ TV — behind on seasons</option>
           <option value="tv-dropped">🚫 Dropped shows</option>
         </select>
       </div>
@@ -928,6 +927,7 @@ function applyFilters(fromFilterChange) {
     }
     if (fl==='tv-partial') {
       if (i._type !== 'tv') return false;
+      if (i.watched === 'Dropped') return false;
       const sw = parseWatchedSeasons(i.seasonsWatched).length;
       const cached = tmdbSeasonCache[i.tmdbId];
       if (sw === 0) return false;
@@ -937,13 +937,6 @@ function applyFilters(fromFilterChange) {
       if (i._type !== 'tv') return false;
       if (parseWatchedSeasons(i.seasonsWatched).length > 0) return false;
       if (i.watched === 'Dropped') return false;
-    }
-    if (fl==='tv-behind') {
-      if (i._type !== 'tv') return false;
-      const cached = tmdbSeasonCache[i.tmdbId];
-      if (!cached) return false;
-      const sw = parseWatchedSeasons(i.seasonsWatched).length;
-      if (sw === 0 || sw >= cached) return false;
     }
     if (fl==='tv-dropped') {
       if (i._type !== 'tv' || i.watched !== 'Dropped') return false;
@@ -1342,12 +1335,11 @@ async function confirmTVWatch() {
     watchedVal = 'Dropped';
   } else if (merged.length > 0 && totalSeasons > 0 && merged.length >= totalSeasons) {
     watchedVal = 'Yes';
-  } else if (merged.length > 0) {
-    watchedVal = 'Yes'; // at least started — column shows "Yes" for any watched
   }
 
   item.seasonsWatched = seasonsStr;
-  item.watched        = dropped ? 'Dropped' : (merged.length > 0 ? 'Yes' : '');
+  // Column D "Watched" is YES only if all seasons are watched
+  item.watched        = watchedVal;
   item.lastWatched    = d || item.lastWatched;
   item.times          = (parseInt(item.times)||0) + (checkedSeasons.length > 0 || dropped ? 1 : 0);
   if (ratingVal) item.rating = ratingVal;
@@ -1434,10 +1426,13 @@ async function confirmTVCollect() {
     .filter(n => !isNaN(n))
     .sort((a,b)=>a-b);
 
-  item.collection = 'Yes';
-  item.seasons = checked.join(', ');
-  btn.classList.add('on');
-  btn.title = tvCollectedTooltip(item, tmdbSeasonCache[item.tmdbId] || document.querySelectorAll('#collect-season-checkboxes .season-btn').length || 0) || 'In collection (click to remove)';
+  const seasonsStr = checked.join(', ');
+  item.seasons = seasonsStr;
+  item.collection = seasonsStr ? 'Yes' : '';
+  btn.classList.toggle('on', !!seasonsStr);
+  btn.title = seasonsStr
+    ? (tvCollectedTooltip(item, tmdbSeasonCache[item.tmdbId] || document.querySelectorAll('#collect-season-checkboxes .season-btn').length || 0) || 'In collection — click to update')
+    : 'Add to collection';
 
   document.getElementById('tv-collect-modal').classList.remove('vis');
   pendingTVCollect = null;
@@ -1446,7 +1441,7 @@ async function confirmTVCollect() {
     { col:'COLLECTION', val:item.collection },
     { col:'SEASONS',    val:item.seasons },
   ]);
-  applyFormatting(item,'COLLECTION',{backgroundColor:{red:0.839,green:0.976,blue:0.839},horizontalAlignment:'CENTER'});
+  if (item.collection) applyFormatting(item,'COLLECTION',{backgroundColor:{red:0.839,green:0.976,blue:0.839},horizontalAlignment:'CENTER'});
 
   // Refresh badges if the card is in DOM
   if (pw) {
@@ -1859,22 +1854,9 @@ function updateTVWatchBtn(btn, item, totalSeasons) {
 // ── Collect ──────────────────────────────────────────────────
 function toggleCollect(item,btn,pw) {
   const on=btn.classList.contains('on');
-  // TV: prompt for collected seasons when turning on
+  // TV: always prompt for collected seasons (no destructive clear on click)
   if (item._type === 'tv') {
-    if (!on) {
-      openTVCollectModal(item, btn, pw);
-      return;
-    }
-    // Turning off: clear collection + collected seasons
-    item.collection = '';
-    item.seasons = '';
-    btn.classList.remove('on');
-    btn.title = 'Add to collection';
-    updateCells(item, [{col:'COLLECTION',val:''},{col:'SEASONS',val:''}]);
-    if (pw) {
-      const card = pw.closest('.card');
-      if (card) updateSeasonBadge(item, card);
-    }
+    openTVCollectModal(item, btn, pw);
     return;
   }
 
