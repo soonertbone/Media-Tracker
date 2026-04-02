@@ -770,7 +770,7 @@ function sheetDateCellValue(v) {
   return cleanVal(v);
 }
 
-// One row for "Watch Log": Date, Title, Year, Type, TMDB ID (matches Apps Script appendWatchLog).
+// One row for "Watch Log": A=Date, B=Title, C=Year, D=Type, E=TMDB ID. TV title may be "Show: Season 3" (season in B, not a 6th column).
 async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
   if (!dateIso) return;
   const yVal = year === '' || year == null ? '' : (typeof year === 'number' ? year : cleanVal(year));
@@ -1378,7 +1378,20 @@ async function confirmTVWatch() {
   if (timesIncremented) {
     const logIso = toIsoDateForLog(d || item.lastWatched);
     if (logIso) {
-      await appendWatchLogRow({ dateIso:logIso, title:item.title, year:item.year, type:'TV Show', tmdbId:item.tmdbId });
+      const newlyWatched = [...new Set(checkedSeasons.filter(s => !prev.includes(s)))].sort((a,b)=>a-b);
+      let logTitle = item.title;
+      if (!dropped && newlyWatched.length === 1) {
+        logTitle = `${item.title}: Season ${newlyWatched[0]}`;
+      } else if (!dropped && newlyWatched.length > 1) {
+        logTitle = `${item.title}: Seasons ${newlyWatched.join(', ')}`;
+      }
+      await appendWatchLogRow({
+        dateIso: logIso,
+        title: logTitle,
+        year: item.year,
+        type: 'TV Show',
+        tmdbId: item.tmdbId,
+      });
       loadWatchLog();
     }
   }
