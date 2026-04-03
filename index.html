@@ -36,7 +36,6 @@
   .toolbar-search { flex:1; min-width:0; }
   .toolbar-search input[type=text] { width:100%; min-width:0; padding:7px 12px; border-radius:8px; font-size:13px; }
   .toolbar-count { font-size:11px; color:var(--muted); white-space:nowrap; flex-shrink:0; padding:0 4px; }
-  .toolbar-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
   .btn-filters {
     display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:8px; border:1px solid var(--border);
     background:var(--card); color:var(--text); font-size:12px; font-family:'DM Sans',sans-serif; cursor:pointer; white-space:nowrap;
@@ -76,19 +75,6 @@
   #add-btn:hover { border-color:var(--accent); color:var(--accent); }
   #large-target-btn { background:var(--card); border:1px solid var(--border); color:var(--muted); padding:6px 10px; border-radius:8px; font-size:12px; cursor:pointer; white-space:nowrap; transition:all .15s; font-family:'DM Sans',sans-serif; }
   #large-target-btn.active { background:rgba(126,158,232,.2); border-color:var(--accent2); color:var(--accent2); }
-  .account-wrap { position:relative; flex-shrink:0; }
-  #user-avatar { width:32px; height:32px; border-radius:50%; background:var(--border); cursor:pointer; border:2px solid var(--border); transition:border-color .2s; display:block; object-fit:cover; }
-  #user-avatar:hover { border-color:var(--accent); }
-  .account-dropdown {
-    display:none; position:absolute; right:0; top:calc(100% + 6px); min-width:160px; background:var(--surface); border:1px solid var(--border);
-    border-radius:10px; padding:6px; box-shadow:0 12px 40px rgba(0,0,0,.5); z-index:120;
-  }
-  .account-dropdown.vis { display:block; }
-  .account-dropdown button {
-    width:100%; text-align:left; padding:8px 10px; border:none; border-radius:6px; background:transparent; color:var(--text);
-    font-size:13px; font-family:'DM Sans',sans-serif; cursor:pointer;
-  }
-  .account-dropdown button:hover { background:var(--card); }
   .app-chrome.stats-view .toolbar-gallery-chunk { display:none !important; }
   .app-chrome.stats-view .filter-panel { display:none !important; }
   .app-chrome.stats-view .btn-filters { display:none !important; }
@@ -367,14 +353,6 @@
         <button type="button" id="add-btn" onclick="openAddModal()" title="Add a new movie or TV show">＋ Add</button>
         <button type="button" id="large-target-btn" onclick="toggleLargeTargets()" title="Toggle large touch targets (Vision Pro)">⊕</button>
       </div>
-      <div class="toolbar-actions">
-        <div class="account-wrap">
-          <img id="user-avatar" title="Account" alt="Account" width="32" height="32">
-          <div class="account-dropdown" id="account-dropdown">
-            <button type="button" onclick="signOutApp()">Sign out</button>
-          </div>
-        </div>
-      </div>
     </div>
     <div class="filter-panel" id="filter-panel" role="region" aria-label="Filters">
       <div class="filter-panel-head">
@@ -649,32 +627,8 @@ function onToken(resp) {
 function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
-  loadUserAvatar();
   loadSheetData();
   loadWatchLog();
-}
-
-function loadUserAvatar() {
-  fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-    headers: { Authorization: 'Bearer ' + accessToken }
-  }).then(r => r.json()).then(u => {
-    if (u.picture) document.getElementById('user-avatar').src = u.picture;
-  }).catch(() => {});
-}
-
-function signOutApp() {
-  accessToken = null;
-  try {
-    localStorage.removeItem('mv_token');
-    localStorage.removeItem('mv_token_expiry');
-  } catch (e) {}
-  try {
-    sessionStorage.removeItem('mv_token');
-    sessionStorage.removeItem('mv_token_expiry');
-  } catch (e) {}
-  document.getElementById('account-dropdown')?.classList.remove('vis');
-  document.getElementById('app').style.display = 'none';
-  document.getElementById('auth-screen').style.display = 'flex';
 }
 
 // ── Sheet Read ───────────────────────────────────────────────
@@ -2093,7 +2047,8 @@ function resetFiltersToDefaults() {
   if (g('f-country')) g('f-country').value = '';
   if (g('f-lang')) g('f-lang').value = '';
   if (g('f-sort')) g('f-sort').value = 'title-asc';
-  applyFilters(true);
+  // Don't use recallSort here — it would reload a saved sort for the "empty" filter key and look like a filter is still active.
+  applyFilters(false);
 }
 
 let _appChromeInited = false;
@@ -2111,22 +2066,11 @@ function initAppChrome() {
     });
   }
   document.getElementById('filter-reset-defaults')?.addEventListener('click', () => resetFiltersToDefaults());
-  const av = document.getElementById('user-avatar');
-  const dd = document.getElementById('account-dropdown');
-  if (av && dd) {
-    av.addEventListener('click', e => {
-      e.stopPropagation();
-      dd.classList.toggle('vis');
-    });
-  }
   document.addEventListener('click', e => {
     const chrome = document.getElementById('app-chrome');
     if (chrome && fp && ft && fp.classList.contains('open') && !chrome.contains(e.target)) {
       fp.classList.remove('open');
       ft.setAttribute('aria-expanded', 'false');
-    }
-    if (dd && av && dd.classList.contains('vis')) {
-      if (!av.contains(e.target) && !dd.contains(e.target)) dd.classList.remove('vis');
     }
   });
   document.addEventListener('keydown', e => {
@@ -2134,7 +2078,6 @@ function initAppChrome() {
       fp.classList.remove('open');
       ft.setAttribute('aria-expanded', 'false');
     }
-    if (e.key === 'Escape' && dd?.classList.contains('vis')) dd.classList.remove('vis');
   });
 }
 
