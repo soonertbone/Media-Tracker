@@ -556,6 +556,11 @@ const TC = {TITLE:0,YEAR:1,RATING:2,WATCHED:3,LAST_WATCHED:4,TIMES:5,RELEASE:6,R
 // Formatting constants matching the spreadsheet
 const FMT_CENTER = { horizontalAlignment: 'CENTER' };
 const FMT_LIST_YES = { backgroundColor: { red:0.839, green:0.894, blue:0.969 }, horizontalAlignment:'CENTER' };
+const FMT_LIST_CLEAR = { backgroundColor: { red:1, green:1, blue:1 }, horizontalAlignment:'LEFT' };
+
+function isWatchlistYes(v) {
+  return String(v || '').trim().toLowerCase() === 'yes';
+}
 
 // ── State ────────────────────────────────────────────────────
 let tokenClient, accessToken;
@@ -651,6 +656,7 @@ async function loadSheetData() {
     ];
     populateDropdowns();
     applyFilters();
+    ensureDateColumnFormatsInSheets().catch(e => console.error('ensureDateColumnFormatsInSheets', e));
   } catch(e) {
     console.error(e);
     showLoading(false);
@@ -849,11 +855,10 @@ async function updateCells(item, updates) {
 }
 
 // Apply formatting to specific cells via Sheets batchUpdate (spreadsheets API)
-async function applyFormatting(item, colKey, fmt) {
+async function applyFormatting(item, colKey, fmt, fieldsMask) {
   const cols   = item._type==='movie' ? MC : TC;
   const colIdx = cols[colKey];
   const rowIdx = item._row - 1; // 0-based
-  const sheetId = item._type==='movie' ? 0 : 1; // we'll look this up properly below
 
   // Fetch sheet metadata to get correct sheetId
   const meta = await fetch(
@@ -865,11 +870,13 @@ async function applyFormatting(item, colKey, fmt) {
   if (!sheetProps) return;
   const sid = sheetProps.properties.sheetId;
 
+  const fields = fieldsMask || 'userEnteredFormat(backgroundColor,horizontalAlignment)';
+
   const req = {
     repeatCell: {
       range: { sheetId:sid, startRowIndex:rowIdx, endRowIndex:rowIdx+1, startColumnIndex:colIdx, endColumnIndex:colIdx+1 },
       cell: { userEnteredFormat: fmt },
-      fields: 'userEnteredFormat(backgroundColor,horizontalAlignment)',
+      fields,
     }
   };
 
@@ -881,9 +888,57 @@ async function applyFormatting(item, colKey, fmt) {
 }
 
 async function applyDateFormat(item, colKey) {
-  // Full date display; Sheets will still respect locale for rendering, but this avoids raw serial display.
   const fmt = { numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } };
-  await applyFormatting(item, colKey, fmt);
+  await applyFormatting(item, colKey, fmt, 'userEnteredFormat.numberFormat');
+}
+
+// After load: normalize date display for main grids and Watch Log column A (existing serials → yyyy-mm-dd).
+async function ensureDateColumnFormatsInSheets() {
+  if (!accessToken || !SHEET_ID) return;
+  const fieldsParam = encodeURIComponent('sheets(properties(sheetId,title,gridProperties(rowCount)))');
+  const meta = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=${fieldsParam}`,
+    { headers:{ Authorization:'Bearer '+accessToken } }
+  ).then(r=>r.json());
+  const fmt = { numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } };
+  const requests = [];
+  for (const sh of meta.sheets || []) {
+    const p = sh.properties;
+    if (!p) continue;
+    const sid = p.sheetId;
+    const title = p.title;
+    const rowCount = (p.gridProperties && p.gridProperties.rowCount) || 5000;
+    const endRow = Math.max(2, rowCount);
+    if (title === 'Watch Log') {
+      requests.push({
+        repeatCell: {
+          range: { sheetId: sid, startRowIndex: 1, endRowIndex: endRow, startColumnIndex: 0, endColumnIndex: 1 },
+          cell: { userEnteredFormat: fmt },
+          fields: 'userEnteredFormat.numberFormat',
+        },
+      });
+      continue;
+    }
+    const colKeys = title === 'Movies' || title === 'TV Shows' ? ['LAST_WATCHED', 'RELEASE', 'DATE_ADDED'] : null;
+    if (!colKeys) continue;
+    const colsMap = title === 'Movies' ? MC : TC;
+    for (const key of colKeys) {
+      const colIdx = colsMap[key];
+      requests.push({
+        repeatCell: {
+          range: { sheetId: sid, startRowIndex: 1, endRowIndex: endRow, startColumnIndex: colIdx, endColumnIndex: colIdx + 1 },
+          cell: { userEnteredFormat: fmt },
+          fields: 'userEnteredFormat.numberFormat',
+        },
+      });
+    }
+  }
+  if (!requests.length) return;
+  await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+      body: JSON.stringify({ requests }) }
+  );
 }
 
 function colLetter(idx) {
@@ -1267,17 +1322,19 @@ async function confirmWatch() {
   btn.title = 'Log another watch';
   document.getElementById('date-modal').classList.remove('vis');
   pendingWatch = null;
+  const hadWatchlist = isWatchlistYes(item.watchlist);
   const updates = [
     {col:'WATCHED',val:'Yes'},
     {col:'LAST_WATCHED',val:d},
     {col:'TIMES',val:item.times},
   ];
   if (ratingVal) updates.push({col:'RATING',val:ratingVal});
-  if (item.watchlist.toLowerCase() === 'yes') {
+  if (hadWatchlist) {
     item.watchlist = '';
     updates.push({col:'WATCHLIST', val:''});
   }
   await updateCells(item, updates);
+  if (hadWatchlist) await applyFormatting(item, 'WATCHLIST', FMT_LIST_CLEAR);
   if (d) {
     await appendWatchLogRow({ dateIso:d, title:item.title, year:item.year, type:'Movie', tmdbId:item.tmdbId });
     loadWatchLog();
@@ -1408,12 +1465,15 @@ async function confirmTVWatch() {
     {col:'TIMES',           val:item.times},
   ];
   if (ratingVal) updates.push({col:'RATING', val:ratingVal});
-  if (item.watchlist.toLowerCase() === 'yes' && item.watched === 'Yes') {
+  const hadWatchlist = isWatchlistYes(item.watchlist);
+  const finishClearsWatchlist = hadWatchlist && item.watched === 'Yes';
+  if (finishClearsWatchlist) {
     item.watchlist = '';
     updates.push({col:'WATCHLIST', val:''});
   }
   const timesIncremented = (checkedSeasons.length > 0 || dropped);
   await updateCells(item, updates);
+  if (finishClearsWatchlist) await applyFormatting(item, 'WATCHLIST', FMT_LIST_CLEAR);
   if (timesIncremented) {
     const logIso = toIsoDateForLog(d || item.lastWatched);
     if (logIso) {
