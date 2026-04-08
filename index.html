@@ -501,14 +501,14 @@
 <div class="modal-overlay" id="add-modal">
   <div class="modal-box">
     <h3>Add a title</h3>
-    <p style="text-align:center">Search movies and TV, then pick the correct year.</p>
+    <p style="text-align:center">Search TMDb by title, or look up by numeric ID (see hint below).</p>
     <div class="add-row">
-      <input type="text" id="add-q" class="modal-input" placeholder="Search TMDb (e.g. The Pitt)" oninput="debouncedAddSearch()" autocomplete="off">
+      <input type="text" id="add-q" class="modal-input" placeholder="Title, or id:550 • #550 • movie:550 • tv:1396" oninput="debouncedAddSearch()" autocomplete="off">
       <button class="modal-btn btn-cancel" style="flex:0 0 auto;padding:9px 12px" onclick="closeAddModal()">Close</button>
     </div>
     <div class="add-status" id="add-status"></div>
     <div class="add-results" id="add-results" style="display:none"></div>
-    <div class="add-hint">Tip: click a result to add it to your Watchlist.</div>
+    <div class="add-hint">Tip: click a result to add it to your Watchlist. By ID use movie:550, tv:1396, #550 or id:550 (tries movie and TV). A plain number tries ID first, then title search if nothing matches.</div>
   </div>
 </div>
 
@@ -1776,6 +1776,36 @@ async function addSearch() {
   setAddStatus('Searching…');
 
   try {
+    const explicit = parseExplicitTmdbIdQuery(q);
+    const bareNumeric = /^\d{1,10}$/.test(q);
+
+    if (explicit || bareNumeric) {
+      const id = explicit ? explicit.id : q;
+      const kind = explicit ? explicit.kind : null;
+      setAddStatus('Looking up TMDb ID…');
+      let idResults = await tmdbLookupById(id, kind);
+      if (myReq !== _addInFlight) return;
+      if (!explicit && bareNumeric && !idResults.length) {
+        // Plain number with no ID match — fall through to title search.
+      } else {
+        idResults.sort((a, b) => {
+          const pa = Number(a.popularity) || 0, pb = Number(b.popularity) || 0;
+          if (pb !== pa) return pb - pa;
+          return (Number(b.year) || 0) - (Number(a.year) || 0);
+        });
+        _addResults = idResults;
+        renderAddResults();
+        if (!idResults.length) {
+          setAddStatus(kind ? 'No title found for that TMDb ID.' : 'No title found for that ID (movie or TV).');
+        } else if (idResults.length > 1) {
+          setAddStatus('Same ID can exist for movie vs TV — pick the correct row.');
+        } else {
+          setAddStatus('Pick below to add.');
+        }
+        return;
+      }
+    }
+
     const [m, tv] = await Promise.all([
       tmdbSearch('movie', q),
       tmdbSearch('tv', q),
@@ -1816,6 +1846,82 @@ async function tmdbSearch(kind, q) {
       poster_path: r.poster_path || '',
     };
   }).filter(r => r.title);
+}
+
+/** Explicit TMDb ID in the add box: #123, id:123, tmdb:123, movie:123, tv:1396 */
+function parseExplicitTmdbIdQuery(raw) {
+  const q = String(raw || '').trim();
+  if (!q) return null;
+  let m = q.match(/^#(\d{1,10})$/);
+  if (m) return { id: m[1], kind: null };
+  m = q.match(/^(?:id|tmdb)\s*:\s*(\d{1,10})$/i);
+  if (m) return { id: m[1], kind: null };
+  m = q.match(/^(?:movie|m)\s*:\s*(\d{1,10})$/i);
+  if (m) return { id: m[1], kind: 'movie' };
+  m = q.match(/^(?:tv|t|show|series)\s*:\s*(\d{1,10})$/i);
+  if (m) return { id: m[1], kind: 'tv' };
+  return null;
+}
+
+function mapMovieToAddResult(data) {
+  if (!data || data.success === false) return null;
+  const title = data.title || data.original_title || '';
+  const date  = data.release_date || '';
+  return {
+    id: data.id,
+    title,
+    year: date ? date.slice(0, 4) : '',
+    popularity: Number(data.popularity) || 0,
+    poster_path: data.poster_path || '',
+    _type: 'movie',
+  };
+}
+
+function mapTvToAddResult(data) {
+  if (!data || data.success === false) return null;
+  const title = data.name || data.original_name || '';
+  const date  = data.first_air_date || '';
+  return {
+    id: data.id,
+    title,
+    year: date ? date.slice(0, 4) : '',
+    popularity: Number(data.popularity) || 0,
+    poster_path: data.poster_path || '',
+    _type: 'tv',
+  };
+}
+
+/** kind: 'movie' | 'tv' | null (both). Returns [] on failure. */
+async function tmdbLookupById(id, kind) {
+  const idStr = String(id || '').trim();
+  if (!/^\d+$/.test(idStr)) return [];
+
+  async function fetchMovie() {
+    const url = `https://api.themoviedb.org/3/movie/${idStr}?api_key=${TMDB_KEY}`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    return mapMovieToAddResult(await r.json());
+  }
+  async function fetchTv() {
+    const url = `https://api.themoviedb.org/3/tv/${idStr}?api_key=${TMDB_KEY}`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    return mapTvToAddResult(await r.json());
+  }
+
+  if (kind === 'movie') {
+    const m = await fetchMovie();
+    return m ? [m] : [];
+  }
+  if (kind === 'tv') {
+    const t = await fetchTv();
+    return t ? [t] : [];
+  }
+  const [m, t] = await Promise.all([fetchMovie(), fetchTv()]);
+  const out = [];
+  if (m) out.push(m);
+  if (t) out.push(t);
+  return out;
 }
 
 function renderAddResults() {
