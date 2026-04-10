@@ -816,14 +816,36 @@ function sheetDateCellValue(v) {
 }
 
 // One row for "Watch Log": A=Date, B=Title, C=Year, D=Type, E=TMDB ID. TV title may be "Show: Season 3" (season in B, not a 6th column).
+function watchLogCellDataAt(colIndex, dateVal, titleStr, yVal, typeStr, idVal) {
+  const str = (v) => ({ userEnteredValue: { stringValue: String(v ?? '') } });
+  if (colIndex === 0) {
+    if (dateVal === '' || dateVal == null || (typeof dateVal === 'number' && !isFinite(dateVal))) {
+      return str('');
+    }
+    if (typeof dateVal === 'number') {
+      return {
+        userEnteredValue: { numberValue: dateVal },
+        userEnteredFormat: { numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } },
+      };
+    }
+    return str(dateVal);
+  }
+  if (colIndex === 1) return str(titleStr);
+  if (colIndex === 2) {
+    if (yVal === '' || yVal == null) return str('');
+    if (typeof yVal === 'number') return { userEnteredValue: { numberValue: yVal } };
+    return str(yVal);
+  }
+  if (colIndex === 3) return str(typeStr);
+  return str(idVal);
+}
+
 async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
   if (!dateIso) return;
   const dateVal = sheetDateCellValue(dateIso);
   const yVal = year === '' || year == null ? '' : (typeof year === 'number' ? year : cleanVal(year));
   const idVal = tmdbId === '' || tmdbId == null ? '' : cleanVal(tmdbId);
-  // Insert new entry directly under the header (row 2) so the log stays "most recent at top".
-  // Also write the date as a Sheets serial number (RAW) so sorting mixes legacy + new correctly.
-  const row = [dateVal, String(title || ''), yVal, type, idVal];
+  const titleStr = String(title || '');
   try {
     const fieldsParam = encodeURIComponent('sheets(properties(sheetId,title))');
     const meta = await fetch(
@@ -834,38 +856,34 @@ async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
     if (!sh) return;
     const sid = sh.properties.sheetId;
 
-    // 1) Insert a blank row at index 1 (0-based), i.e. Google Sheets row 2.
-    const insertReq = {
-      insertDimension: {
-        range: { sheetId: sid, dimension: 'ROWS', startIndex: 1, endIndex: 2 },
-        inheritFromBefore: false
-      }
-    };
+    // One batch: insert row under header then write cells (avoids empty row if Values API fails).
+    const rowValues = [0, 1, 2, 3, 4].map(j => watchLogCellDataAt(j, dateVal, titleStr, yVal, type, idVal));
+    const requests = [
+      {
+        insertDimension: {
+          range: { sheetId: sid, dimension: 'ROWS', startIndex: 1, endIndex: 2 },
+          inheritFromBefore: false,
+        },
+      },
+      {
+        updateCells: {
+          range: { sheetId: sid, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 5 },
+          rows: [{ values: rowValues }],
+          fields: 'userEnteredValue,userEnteredFormat',
+        },
+      },
+    ];
     const r1 = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
       { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
-        body: JSON.stringify({ requests:[insertReq] }) }
+        body: JSON.stringify({ requests }) }
     );
     if (!r1.ok) {
       const err = await r1.text();
-      console.error('watch log insertDimension failed', r1.status, err);
-      return;
-    }
-
-    // 2) Fill A2:E2 with the new row values.
-    const r2 = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Watch Log!A2:E2')}:update?valueInputOption=RAW`,
-      { method:'PUT', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
-        body: JSON.stringify({ values:[row] }) }
-    );
-    if (!r2.ok) {
-      const err = await r2.text();
-      console.error('watch log update A2:E2 failed', r2.status, err);
+      console.error('watch log batchUpdate (insert+cells) failed', r1.status, err);
     }
   } finally {
-    // Keep banded rows covering inserted/appended rows (so new entries keep alternating colors, even after sorts).
     ensureWatchLogBandedRange().catch(e => console.error('ensureWatchLogBandedRange', e));
-    ensureDateColumnFormatsInSheets().catch(e => console.error('ensureDateColumnFormatsInSheets', e));
   }
 }
 
@@ -887,6 +905,9 @@ async function ensureWatchLogBandedRange() {
 
   const existing = (sh.bandedRanges || [])[0];
   const requests = [];
+  // Light gray stripe ≈ default Sheets banding (avoid blue: headerColor is applied to the first data row).
+  const bandWhite = { red: 1, green: 1, blue: 1 };
+  const bandGray = { red: 0.95, green: 0.95, blue: 0.95 };
 
   if (existing && existing.bandedRangeId) {
     const updated = JSON.parse(JSON.stringify(existing));
@@ -897,22 +918,26 @@ async function ensureWatchLogBandedRange() {
     updated.range.endRowIndex = endRow;
     updated.range.startColumnIndex = 0;
     updated.range.endColumnIndex = endCol;
+    const rp = updated.rowProperties = updated.rowProperties || {};
+    const first = rp.firstBandColor || bandWhite;
+    rp.headerColor = first;
+    if (!rp.firstBandColor) rp.firstBandColor = bandWhite;
+    if (!rp.secondBandColor) rp.secondBandColor = bandGray;
     requests.push({
       updateBandedRange: {
         bandedRange: updated,
-        fields: 'range',
+        fields: 'range,rowProperties(headerColor,firstBandColor,secondBandColor)',
       }
     });
   } else {
-    // Create a simple banded range if none exists (alternating light/white).
     requests.push({
       addBanding: {
         bandedRange: {
           range: { sheetId: sid, startRowIndex: 1, endRowIndex: endRow, startColumnIndex: 0, endColumnIndex: endCol },
           rowProperties: {
-            headerColor: { red: 1, green: 1, blue: 1 },
-            firstBandColor: { red: 1, green: 1, blue: 1 },
-            secondBandColor: { red: 0.97, green: 0.97, blue: 0.97 },
+            headerColor: bandWhite,
+            firstBandColor: bandWhite,
+            secondBandColor: bandGray,
           },
         },
       },
