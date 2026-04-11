@@ -816,28 +816,43 @@ function sheetDateCellValue(v) {
 }
 
 // One row for "Watch Log": A=Date, B=Title, C=Year, D=Type, E=TMDB ID. TV title may be "Show: Season 3" (season in B, not a 6th column).
+function watchLogCellFormat(colIndex) {
+  const textFormat = { fontFamily: 'Arial', fontSize: 10 };
+  const horizontalAlignment = [0, 2, 3, 4].includes(colIndex) ? 'CENTER' : 'LEFT';
+  return { textFormat, horizontalAlignment };
+}
+
 function watchLogCellDataAt(colIndex, dateVal, titleStr, yVal, typeStr, idVal) {
-  const str = (v) => ({ userEnteredValue: { stringValue: String(v ?? '') } });
+  const fmt = watchLogCellFormat(colIndex);
+  const strCell = (v) => ({
+    userEnteredValue: { stringValue: String(v ?? '') },
+    userEnteredFormat: fmt,
+  });
   if (colIndex === 0) {
     if (dateVal === '' || dateVal == null || (typeof dateVal === 'number' && !isFinite(dateVal))) {
-      return str('');
+      return strCell('');
     }
     if (typeof dateVal === 'number') {
       return {
         userEnteredValue: { numberValue: dateVal },
-        userEnteredFormat: { numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } },
+        userEnteredFormat: {
+          ...fmt,
+          numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' },
+        },
       };
     }
-    return str(dateVal);
+    return strCell(dateVal);
   }
-  if (colIndex === 1) return str(titleStr);
+  if (colIndex === 1) return strCell(titleStr);
   if (colIndex === 2) {
-    if (yVal === '' || yVal == null) return str('');
-    if (typeof yVal === 'number') return { userEnteredValue: { numberValue: yVal } };
-    return str(yVal);
+    if (yVal === '' || yVal == null) return strCell('');
+    if (typeof yVal === 'number') {
+      return { userEnteredValue: { numberValue: yVal }, userEnteredFormat: fmt };
+    }
+    return strCell(yVal);
   }
-  if (colIndex === 3) return str(typeStr);
-  return str(idVal);
+  if (colIndex === 3) return strCell(typeStr);
+  return strCell(idVal);
 }
 
 async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
@@ -1415,13 +1430,20 @@ async function openPosterPicker(item, pw) {
 
 // ── Watch logging ────────────────────────────────────────────
 
+/** Local calendar date as YYYY-MM-DD for <input type="date"> (avoids valueAsDate + UTC showing tomorrow). */
+function todayForDateInput() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function logWatch(item, btn, pw) {
   if (item._type === 'tv') {
     openTVWatchModal(item, btn, pw);
   } else {
     pendingWatch = {item, btn, pw};
     document.getElementById('date-modal-title').textContent = item.title;
-    document.getElementById('date-input').valueAsDate = new Date();
+    document.getElementById('date-input').value = todayForDateInput();
     const rs = document.getElementById('date-rating-input');
     if (rs) rs.value = item.rating || '';
     document.getElementById('date-modal').classList.add('vis');
@@ -1473,7 +1495,7 @@ let pendingTVCollect = null;
 async function openTVWatchModal(item, btn, pw) {
   pendingTVWatch = {item, btn, pw};
   document.getElementById('tv-modal-title').textContent = item.title;
-  document.getElementById('tv-date-input').valueAsDate = new Date();
+  document.getElementById('tv-date-input').value = todayForDateInput();
   let tvRating = document.getElementById('tv-rating-input');
   if (!tvRating) {
     const box = document.querySelector('#tv-watch-modal .modal-box');
