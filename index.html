@@ -445,6 +445,7 @@
       <span class="fl">Date watched</span>
       <input type="date" id="tv-date-input" class="modal-input" style="margin-top:6px">
     </div>
+    <p id="tv-modal-err" style="display:none;color:#e87a7a;font-size:12px;margin-top:10px;text-align:left;line-height:1.4"></p>
     <div class="modal-actions">
       <button class="modal-btn btn-confirm" onclick="confirmTVWatch()">Save</button>
       <button class="modal-btn btn-cancel"  onclick="cancelTVWatch()">Cancel</button>
@@ -471,6 +472,7 @@
     <h3>Log a watch</h3>
     <p id="date-modal-title"></p>
     <input type="date" id="date-input" class="modal-input">
+    <p id="date-modal-err" style="display:none;color:#e87a7a;font-size:12px;margin-top:10px;text-align:left;line-height:1.4"></p>
     <select id="date-rating-input" class="modal-input" style="margin-top:8px">
       <option value="">Add rating (optional)</option>
       <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
@@ -564,6 +566,8 @@ function isWatchlistYes(v) {
 
 // ── State ────────────────────────────────────────────────────
 let tokenClient, accessToken;
+const _tokenWaiters = [];
+let _sheetSaveInFlight = false;
 let allItems = [], filtered = [];
 let curType  = 'all';
 let pendingWatch = null;
@@ -608,6 +612,8 @@ function signIn() {
 
 function onToken(resp) {
   if (resp.error) {
+    const waiters = _tokenWaiters.splice(0);
+    waiters.forEach(({ reject }) => reject(new Error(resp.error_description || resp.error || 'Sign-in failed')));
     // Silent attempts can fail without requiring user-visible errors.
     if (interactiveLogin) {
       document.getElementById('auth-error').textContent = 'Sign-in failed: ' + resp.error;
@@ -624,9 +630,57 @@ function onToken(resp) {
     localStorage.setItem('mv_token_expiry', String(exp));
   } catch (e) {}
   sessionStorage.setItem('mv_token', accessToken);
-  sessionStorage.setItem('mv_token_expiry', exp);
+  sessionStorage.setItem('mv_token_expiry', String(exp));
+  const waiters = _tokenWaiters.splice(0);
+  waiters.forEach(({ resolve }) => resolve());
   interactiveLogin = false;
-  showApp();
+  const appEl = document.getElementById('app');
+  if (!appEl || appEl.style.display !== 'flex') {
+    showApp();
+  }
+}
+
+/** Refresh OAuth token when near expiry (silent). Resolves when token is still valid or was renewed. */
+function ensureAccessTokenFresh() {
+  const exp = parseInt(localStorage.getItem('mv_token_expiry') || sessionStorage.getItem('mv_token_expiry') || '0', 10);
+  if (!accessToken) return Promise.reject(new Error('Not signed in.'));
+  if (!tokenClient) return Promise.resolve();
+  if (Date.now() < exp - 3 * 60 * 1000) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const entry = {
+      resolve: () => { clearTimeout(entry.tid); resolve(); },
+      reject: (e) => { clearTimeout(entry.tid); reject(e); },
+      tid: null,
+    };
+    entry.tid = setTimeout(() => {
+      const i = _tokenWaiters.indexOf(entry);
+      if (i >= 0) _tokenWaiters.splice(i, 1);
+      reject(new Error('Could not refresh your Google session in time. Sign out and sign in again, then retry.'));
+    }, 25000);
+    _tokenWaiters.push(entry);
+    try {
+      tokenClient.requestAccessToken({ prompt: '' });
+    } catch (e) {
+      clearTimeout(entry.tid);
+      const i = _tokenWaiters.indexOf(entry);
+      if (i >= 0) _tokenWaiters.splice(i, 1);
+      reject(e);
+    }
+  });
+}
+
+async function sheetsResponseOrThrow(r, actionLabel) {
+  if (r.ok) return;
+  const raw = await r.text();
+  let detail = raw;
+  try {
+    const j = JSON.parse(raw);
+    detail = j.error?.message || j.error?.errors?.[0]?.message || j.error?.status || raw;
+  } catch (e) { /* keep raw */ }
+  if (r.status === 401 || r.status === 403) {
+    throw new Error(`Google rejected the save (${r.status}). Your session may have expired — use Sign out, sign in again, then retry. ${detail ? '(' + detail + ')' : ''}`);
+  }
+  throw new Error(`${actionLabel} failed (${r.status}). ${detail || 'Check your connection and try again.'}`);
 }
 
 function showApp() {
@@ -862,11 +916,14 @@ async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
   const idVal = tmdbId === '' || tmdbId == null ? '' : cleanVal(tmdbId);
   const titleStr = String(title || '');
   try {
+    await ensureAccessTokenFresh();
     const fieldsParam = encodeURIComponent('sheets(properties(sheetId,title))');
-    const meta = await fetch(
+    const metaR = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=${fieldsParam}`,
       { headers:{ Authorization:'Bearer '+accessToken } }
-    ).then(r=>r.json());
+    );
+    await sheetsResponseOrThrow(metaR, 'Sheet lookup');
+    const meta = await metaR.json();
     const sh = (meta.sheets || []).find(s => s.properties && s.properties.title === 'Watch Log');
     if (!sh) return;
     const sid = sh.properties.sheetId;
@@ -893,10 +950,7 @@ async function appendWatchLogRow({ dateIso, title, year, type, tmdbId }) {
       { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
         body: JSON.stringify({ requests }) }
     );
-    if (!r1.ok) {
-      const err = await r1.text();
-      console.error('watch log batchUpdate (insert+cells) failed', r1.status, err);
-    }
+    await sheetsResponseOrThrow(r1, 'Watch Log update');
   } finally {
     ensureWatchLogBandedRange().catch(e => console.error('ensureWatchLogBandedRange', e));
   }
@@ -968,6 +1022,7 @@ async function ensureWatchLogBandedRange() {
 }
 
 async function updateCells(item, updates) {
+  await ensureAccessTokenFresh();
   const cols = item._type==='movie' ? MC : TC;
   const hasDateUpdate = updates.some(u => u.col === 'LAST_WATCHED');
   const data = updates.map(u => {
@@ -977,11 +1032,12 @@ async function updateCells(item, updates) {
       values: [[val]],
     };
   });
-  await fetch(
+  const r = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
     { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
       body: JSON.stringify({ valueInputOption:'RAW', data }) }
   );
+  await sheetsResponseOrThrow(r, 'Saving to sheet');
 
   // Ensure LAST_WATCHED displays as a date (prevents seeing 46112 in sheets formatted as plain number).
   if (hasDateUpdate) {
@@ -991,15 +1047,18 @@ async function updateCells(item, updates) {
 
 // Apply formatting to specific cells via Sheets batchUpdate (spreadsheets API)
 async function applyFormatting(item, colKey, fmt, fieldsMask) {
+  await ensureAccessTokenFresh();
   const cols   = item._type==='movie' ? MC : TC;
   const colIdx = cols[colKey];
   const rowIdx = item._row - 1; // 0-based
 
   // Fetch sheet metadata to get correct sheetId
-  const meta = await fetch(
+  const metaR = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=sheets.properties`,
     { headers:{ Authorization:'Bearer '+accessToken } }
-  ).then(r=>r.json());
+  );
+  await sheetsResponseOrThrow(metaR, 'Sheet lookup');
+  const meta = await metaR.json();
 
   const sheetProps = meta.sheets.find(s => s.properties.title === item._sheet);
   if (!sheetProps) return;
@@ -1015,11 +1074,12 @@ async function applyFormatting(item, colKey, fmt, fieldsMask) {
     }
   };
 
-  await fetch(
+  const r = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
     { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
       body: JSON.stringify({ requests:[req] }) }
   );
+  await sheetsResponseOrThrow(r, 'Updating cell format');
 }
 
 async function applyDateFormat(item, colKey) {
@@ -1443,6 +1503,8 @@ function logWatch(item, btn, pw) {
   } else {
     pendingWatch = {item, btn, pw};
     document.getElementById('date-modal-title').textContent = item.title;
+    const de = document.getElementById('date-modal-err');
+    if (de) { de.textContent = ''; de.style.display = 'none'; }
     document.getElementById('date-input').value = todayForDateInput();
     const rs = document.getElementById('date-rating-input');
     if (rs) rs.value = item.rating || '';
@@ -1452,38 +1514,54 @@ function logWatch(item, btn, pw) {
 
 // ── Movie watch confirm ───────────────────────────────────────
 async function confirmWatch() {
-  if (!pendingWatch) return;
-  const {item,btn,pw} = pendingWatch;
+  if (!pendingWatch || _sheetSaveInFlight) return;
+  const errEl = document.getElementById('date-modal-err');
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+
+  const { item, btn } = pendingWatch;
   const d = document.getElementById('date-input').value;
   const ratingVal = document.getElementById('date-rating-input').value;
-  item.watched = 'Yes';
-  item.lastWatched = d;
-  item.times = (parseInt(item.times)||0) + 1;
-  if (ratingVal) item.rating = ratingVal;
-  btn.classList.add('on');
-  btn.title = 'Log another watch';
-  document.getElementById('date-modal').classList.remove('vis');
-  pendingWatch = null;
   const hadWatchlist = isWatchlistYes(item.watchlist);
+  const nextTimes = (parseInt(item.times) || 0) + 1;
   const updates = [
-    {col:'WATCHED',val:'Yes'},
-    {col:'LAST_WATCHED',val:d},
-    {col:'TIMES',val:item.times},
+    { col: 'WATCHED', val: 'Yes' },
+    { col: 'LAST_WATCHED', val: d },
+    { col: 'TIMES', val: nextTimes },
   ];
-  if (ratingVal) updates.push({col:'RATING',val:ratingVal});
-  if (hadWatchlist) {
-    item.watchlist = '';
-    updates.push({col:'WATCHLIST', val:''});
-  }
-  await updateCells(item, updates);
-  if (hadWatchlist) await applyFormatting(item, 'WATCHLIST', FMT_LIST_CLEAR);
-  if (d) {
-    await appendWatchLogRow({ dateIso:d, title:item.title, year:item.year, type:'Movie', tmdbId:item.tmdbId });
-    loadWatchLog();
+  if (ratingVal) updates.push({ col: 'RATING', val: ratingVal });
+  if (hadWatchlist) updates.push({ col: 'WATCHLIST', val: '' });
+
+  _sheetSaveInFlight = true;
+  try {
+    await updateCells(item, updates);
+    if (hadWatchlist) await applyFormatting(item, 'WATCHLIST', FMT_LIST_CLEAR);
+    if (d) {
+      await appendWatchLogRow({ dateIso: d, title: item.title, year: item.year, type: 'Movie', tmdbId: item.tmdbId });
+      loadWatchLog();
+    }
+    item.watched = 'Yes';
+    item.lastWatched = d;
+    item.times = nextTimes;
+    if (ratingVal) item.rating = ratingVal;
+    if (hadWatchlist) item.watchlist = '';
+    btn.classList.add('on');
+    btn.title = 'Log another watch';
+    document.getElementById('date-modal').classList.remove('vis');
+    pendingWatch = null;
+  } catch (e) {
+    console.error(e);
+    if (errEl) {
+      errEl.textContent = e.message || 'Could not save to Google Sheets. Check your connection and try again.';
+      errEl.style.display = 'block';
+    }
+  } finally {
+    _sheetSaveInFlight = false;
   }
 }
 
 function cancelWatch() {
+  const errEl = document.getElementById('date-modal-err');
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
   document.getElementById('date-modal').classList.remove('vis');
   pendingWatch = null;
 }
@@ -1495,6 +1573,8 @@ let pendingTVCollect = null;
 async function openTVWatchModal(item, btn, pw) {
   pendingTVWatch = {item, btn, pw};
   document.getElementById('tv-modal-title').textContent = item.title;
+  const te = document.getElementById('tv-modal-err');
+  if (te) { te.textContent = ''; te.style.display = 'none'; }
   document.getElementById('tv-date-input').value = todayForDateInput();
   let tvRating = document.getElementById('tv-rating-input');
   if (!tvRating) {
@@ -1565,8 +1645,11 @@ function updateTVModalPctBar() {
 }
 
 async function confirmTVWatch() {
-  if (!pendingTVWatch) return;
-  const {item, btn, pw} = pendingTVWatch;
+  if (!pendingTVWatch || _sheetSaveInFlight) return;
+  const errEl = document.getElementById('tv-modal-err');
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+
+  const { item, btn } = pendingTVWatch;
   const d       = document.getElementById('tv-date-input').value;
   const dropped = document.getElementById('dropped-cb').checked;
   const ratingVal = document.getElementById('tv-rating-input')?.value || '';
@@ -1574,12 +1657,10 @@ async function confirmTVWatch() {
   const checkedSeasons = [...document.querySelectorAll('.season-cb:checked')].map(cb=>parseInt(cb.value));
   const totalSeasons   = document.querySelectorAll('.season-cb').length;
 
-  // Merge with previously watched seasons
   const prev    = parseWatchedSeasons(item.seasonsWatched);
   const merged  = [...new Set([...prev, ...checkedSeasons])].sort((a,b)=>a-b);
   const seasonsStr = merged.join(', ');
 
-  // Determine watched status
   let watchedVal = '';
   if (dropped) {
     watchedVal = 'Dropped';
@@ -1587,58 +1668,68 @@ async function confirmTVWatch() {
     watchedVal = 'Yes';
   }
 
-  item.seasonsWatched = seasonsStr;
-  // Column D "Watched" is YES only if all seasons are watched
-  item.watched        = watchedVal;
-  item.lastWatched    = d || item.lastWatched;
-  item.times          = (parseInt(item.times)||0) + (checkedSeasons.length > 0 || dropped ? 1 : 0);
-  if (ratingVal) item.rating = ratingVal;
-
-  // Update watch button appearance
-  updateTVWatchBtn(btn, item, totalSeasons || tmdbSeasonCache[item.tmdbId] || 0);
-
-  document.getElementById('tv-watch-modal').classList.remove('vis');
-  pendingTVWatch = null;
-
+  const nextLastWatched = d || item.lastWatched;
+  const nextTimes = (parseInt(item.times) || 0) + (checkedSeasons.length > 0 || dropped ? 1 : 0);
   const updates = [
-    {col:'SEASONS_WATCHED', val:seasonsStr},
-    {col:'WATCHED',         val:item.watched},
-    {col:'LAST_WATCHED',    val:item.lastWatched},
-    {col:'TIMES',           val:item.times},
+    { col: 'SEASONS_WATCHED', val: seasonsStr },
+    { col: 'WATCHED', val: watchedVal },
+    { col: 'LAST_WATCHED', val: nextLastWatched },
+    { col: 'TIMES', val: nextTimes },
   ];
-  if (ratingVal) updates.push({col:'RATING', val:ratingVal});
+  if (ratingVal) updates.push({ col: 'RATING', val: ratingVal });
   const hadWatchlist = isWatchlistYes(item.watchlist);
-  const finishClearsWatchlist = hadWatchlist && item.watched === 'Yes';
-  if (finishClearsWatchlist) {
-    item.watchlist = '';
-    updates.push({col:'WATCHLIST', val:''});
-  }
+  const finishClearsWatchlist = hadWatchlist && watchedVal === 'Yes';
+  if (finishClearsWatchlist) updates.push({ col: 'WATCHLIST', val: '' });
+
   const timesIncremented = (checkedSeasons.length > 0 || dropped);
-  await updateCells(item, updates);
-  if (finishClearsWatchlist) await applyFormatting(item, 'WATCHLIST', FMT_LIST_CLEAR);
-  if (timesIncremented) {
-    const logIso = toIsoDateForLog(d || item.lastWatched);
-    if (logIso) {
-      const newlyWatched = [...new Set(checkedSeasons.filter(s => !prev.includes(s)))].sort((a,b)=>a-b);
-      let logTitle = item.title;
-      if (!dropped && newlyWatched.length === 1) {
-        logTitle = `${item.title}: Season ${newlyWatched[0]}`;
-      } else if (!dropped && newlyWatched.length > 1) {
-        logTitle = `${item.title}: Seasons ${newlyWatched.join(', ')}`;
+
+  _sheetSaveInFlight = true;
+  try {
+    await updateCells(item, updates);
+    if (finishClearsWatchlist) await applyFormatting(item, 'WATCHLIST', FMT_LIST_CLEAR);
+    if (timesIncremented) {
+      const logIso = toIsoDateForLog(d || nextLastWatched);
+      if (logIso) {
+        const newlyWatched = [...new Set(checkedSeasons.filter(s => !prev.includes(s)))].sort((a,b)=>a-b);
+        let logTitle = item.title;
+        if (!dropped && newlyWatched.length === 1) {
+          logTitle = `${item.title}: Season ${newlyWatched[0]}`;
+        } else if (!dropped && newlyWatched.length > 1) {
+          logTitle = `${item.title}: Seasons ${newlyWatched.join(', ')}`;
+        }
+        await appendWatchLogRow({
+          dateIso: logIso,
+          title: logTitle,
+          year: item.year,
+          type: 'TV Show',
+          tmdbId: item.tmdbId,
+        });
+        loadWatchLog();
       }
-      await appendWatchLogRow({
-        dateIso: logIso,
-        title: logTitle,
-        year: item.year,
-        type: 'TV Show',
-        tmdbId: item.tmdbId,
-      });
-      loadWatchLog();
     }
+    item.seasonsWatched = seasonsStr;
+    item.watched = watchedVal;
+    item.lastWatched = nextLastWatched;
+    item.times = nextTimes;
+    if (ratingVal) item.rating = ratingVal;
+    if (finishClearsWatchlist) item.watchlist = '';
+    updateTVWatchBtn(btn, item, totalSeasons || tmdbSeasonCache[item.tmdbId] || 0);
+    document.getElementById('tv-watch-modal').classList.remove('vis');
+    pendingTVWatch = null;
+  } catch (e) {
+    console.error(e);
+    if (errEl) {
+      errEl.textContent = e.message || 'Could not save to Google Sheets. Check your connection and try again.';
+      errEl.style.display = 'block';
+    }
+  } finally {
+    _sheetSaveInFlight = false;
   }
 }
 
 function cancelTVWatch() {
+  const errEl = document.getElementById('tv-modal-err');
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
   document.getElementById('tv-watch-modal').classList.remove('vis');
   pendingTVWatch = null;
 }
