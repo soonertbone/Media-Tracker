@@ -371,7 +371,9 @@
           <label for="f-collect">Collection</label>
           <select id="f-collect" onchange="applyFilters(true)">
             <option value="">All</option><option value="yes">Collected</option>
-            <option value="no">Not collected</option><option value="null">— Hide —</option>
+            <option value="no">Not collected</option>
+            <option value="partial-tv">Partially collected TV</option>
+            <option value="null">— Hide —</option>
           </select>
         </div>
         <div class="filter-field filter-field-span2">
@@ -1189,6 +1191,9 @@ function applyFilters(fromFilterChange) {
   const fla = document.getElementById('f-lang').value;
   const srt = document.getElementById('f-sort').value;
   saveFilterPrefs();
+  if (fl === 'tv-incomplete' || fc === 'partial-tv') {
+    preloadTVSeasonCountsForCollection().catch(e => console.error('preloadTVSeasonCountsForCollection', e));
+  }
 
   filtered = allItems.filter(i => {
     if (curType!=='all' && i._type!==curType) return false;
@@ -1202,6 +1207,13 @@ function applyFilters(fromFilterChange) {
     const col = i.collection.toLowerCase()==='yes';
     if (fc==='yes'  && !col) return false;
     if (fc==='no'   && col)  return false;
+    if (fc==='partial-tv') {
+      if (i._type !== 'tv' || !col) return false;
+      const total = tmdbSeasonCache[i.tmdbId];
+      if (!Number.isFinite(total) || total <= 0) return false;
+      const collectedCount = new Set(parseCollectedSeasons(i.seasons)).size;
+      if (collectedCount >= total) return false;
+    }
     if (fc==='null' && col)  return false; // hide collected
 
     const onAny = i.watchlist.toLowerCase()==='yes' || i.list1001.toLowerCase()==='yes' ||
@@ -1215,9 +1227,8 @@ function applyFilters(fromFilterChange) {
     if (fl==='tv-incomplete') {
       if (i._type !== 'tv' || i.collection.toLowerCase() !== 'yes') return false;
       const cached = tmdbSeasonCache[i.tmdbId];
-      if (cached === undefined) return true;
-      if (cached === null) return false;
-      if (parseCollectedSeasons(i.seasons).length >= cached) return false;
+      if (!Number.isFinite(cached) || cached <= 0) return false;
+      if (new Set(parseCollectedSeasons(i.seasons)).size >= cached) return false;
     }
     if (fl==='tv-full') {
       if (i._type !== 'tv') return false;
@@ -2656,6 +2667,25 @@ function renderMonthly(year) {
 
 // ── TMDb Season Check ─────────────────────────────────────────
 const tmdbSeasonCache = {};
+let _seasonPreloadInFlight = false;
+
+async function preloadTVSeasonCountsForCollection() {
+  if (_seasonPreloadInFlight) return;
+  const targets = allItems.filter(i =>
+    i && i._type === 'tv' &&
+    String(i.collection || '').toLowerCase() === 'yes' &&
+    i.tmdbId &&
+    tmdbSeasonCache[i.tmdbId] === undefined
+  );
+  if (!targets.length) return;
+  _seasonPreloadInFlight = true;
+  try {
+    await Promise.all(targets.map(i => checkTVSeasons(i)));
+    applyFilters(false);
+  } finally {
+    _seasonPreloadInFlight = false;
+  }
+}
 
 async function checkTVSeasons(item) {
   if (!item.tmdbId || item._type !== 'tv') return null;
