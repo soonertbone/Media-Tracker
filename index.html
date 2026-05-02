@@ -373,6 +373,8 @@
             <option value="">All</option><option value="yes">Collected</option>
             <option value="no">Not collected</option>
             <option value="partial-tv">Partially collected TV</option>
+            <option value="dont-want">Don’t want</option>
+            <option value="cant-find">Can’t find</option>
             <option value="null">— Hide —</option>
           </select>
         </div>
@@ -1145,6 +1147,18 @@ function colLetter(idx) {
 }
 
 // ── Filters ──────────────────────────────────────────────────
+/** Matches Collection sheet values case-insensitively; apostrophes optional; spaces ignored for phrases. */
+function collectionNormKey(collectionCell) {
+  let s = String(collectionCell ?? '').trim().toLowerCase();
+  s = s.replace(/\u2019/g, "'"); // curly apostrophe
+  const folded = s.replace(/'/g, '').replace(/\s+/g, '');
+  if (!folded) return '';
+  if (folded === 'yes') return 'yes';
+  if (folded === 'dontwant' || folded === 'donotwant') return 'dont-want';
+  if (folded === 'cantfind') return 'cant-find';
+  return ''; // unrecognized → treat like empty for status filters that need explicit phrases
+}
+
 function populateDropdowns() {
   const cos = [...new Set(allItems.map(i=>i.country).filter(Boolean))].sort();
   const las = [...new Set(allItems.map(i=>i.language).filter(Boolean))].sort();
@@ -1204,17 +1218,21 @@ function applyFilters(fromFilterChange) {
     if (fw==='no'   && w)  return false;
     if (fw==='null' && w)  return false; // hide watched
 
-    const col = i.collection.toLowerCase()==='yes';
-    if (fc==='yes'  && !col) return false;
-    if (fc==='no'   && col)  return false;
-    if (fc==='partial-tv') {
+    const collKey = collectionNormKey(i.collection);
+    const col = collKey === 'yes'; // spreadsheet "Yes" for in-collection
+    if (fc === 'yes' && !col) return false;
+    if (fc === 'dont-want' && collKey !== 'dont-want') return false;
+    if (fc === 'cant-find' && collKey !== 'cant-find') return false;
+    // Not collected: still looking / undecided (exclude explicit statuses)
+    if (fc === 'no' && (col || collKey === 'dont-want' || collKey === 'cant-find')) return false;
+    if (fc === 'partial-tv') {
       if (i._type !== 'tv' || !col) return false;
       const total = tmdbSeasonCache[i.tmdbId];
       if (!Number.isFinite(total) || total <= 0) return false;
       const collectedCount = new Set(parseCollectedSeasons(i.seasons)).size;
       if (collectedCount >= total) return false;
     }
-    if (fc==='null' && col)  return false; // hide collected
+    if (fc === 'null' && col) return false; // hide collected ("Yes") rows
 
     const onAny = i.watchlist.toLowerCase()==='yes' || i.list1001.toLowerCase()==='yes' ||
                   i.list1001d.toLowerCase()==='yes' || i.holly.toLowerCase()==='yes';
@@ -1224,8 +1242,8 @@ function applyFilters(fromFilterChange) {
     if (fl==='list1001d' && i.list1001d.toLowerCase()!=='yes') return false;
     if (fl==='holly'     && i.holly.toLowerCase()!=='yes')     return false;
     if (fl==='none'      && onAny) return false;
-    if (fl==='tv-incomplete') {
-      if (i._type !== 'tv' || i.collection.toLowerCase() !== 'yes') return false;
+    if (fl === 'tv-incomplete') {
+      if (i._type !== 'tv' || !col) return false;
       const cached = tmdbSeasonCache[i.tmdbId];
       if (!Number.isFinite(cached) || cached <= 0) return false;
       if (new Set(parseCollectedSeasons(i.seasons)).size >= cached) return false;
