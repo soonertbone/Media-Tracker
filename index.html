@@ -321,7 +321,7 @@
   .rank-context .rk { color:var(--text); font-weight:600; }
   .rank-context .me { color:var(--accent2); font-weight:600; }
   .rank-vs { display:flex; flex-direction:column; gap:12px; align-items:center; justify-content:center; padding:12px; height:100%; }
-  .rank-vs-row { display:grid; grid-template-columns:1fr 80px 1fr; gap:14px; width:100%; max-width:980px; align-items:center; }
+  .rank-vs-row { display:grid; grid-template-columns:1fr 80px 1fr; gap:14px; width:100%; max-width:780px; align-items:center; }
   @media (max-width:980px) { .rank-vs-row { grid-template-columns:1fr; } }
   .vs-chip { text-align:center; font-family:'DM Serif Display',serif; color:var(--accent); font-size:18px; }
   .rank-poster { background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; cursor:pointer; position:relative; aspect-ratio:2/3; }
@@ -1127,6 +1127,19 @@ async function commitPlacementChoice({ matchup, winner, loser }) {
   } else {
     placementState.low = midIndex + 1;
   }
+
+  // If you asked for a fixed number of placement matchups, stop there and insert.
+  if (Number.isFinite(placementState.targetComparisons) && placementState.comparisons >= placementState.targetComparisons) {
+    const insertAt = Math.max(0, Math.min(placementState.low, ranking.length));
+    ranking.splice(insertAt, 0, placementState.entry);
+    rebuildRankingIndex();
+    placementState = null;
+    await writeFullRankingToSheet();
+    updateRankTotalsUI();
+    beginNextMatchup();
+    return;
+  }
+
   beginPlacementMatchup();
 }
 
@@ -1205,16 +1218,16 @@ function rankContextBlockFor(entry) {
   const key = rankKeyOf(entry);
   const idx = rankingByKey.get(key);
   if (!Number.isFinite(idx)) return 'Not ranked yet.';
-  const start = Math.max(0, idx - 10);
-  const end = Math.min(ranking.length - 1, idx + 10);
-  let html = `<div><span class="rk">#${idx + 1}</span> <span class="me">${esc(entry.title || '')}</span> <span>(${esc(entry.year || '')})</span></div>`;
-  html += `<div style="margin-top:8px">`;
+  const start = Math.max(0, idx - 5);
+  const end = Math.min(ranking.length - 1, idx + 5);
+  let html = `<div style="margin-bottom:8px"><span class="rk">#${idx + 1}</span> ${esc(entry.title || '')} <span style="opacity:.7">(${esc(entry.year || '')})</span></div>`;
+  html += `<div>`;
+  if (start > 0) html += `<div style="margin:2px 0;color:var(--muted)">…</div>`;
   for (let i = start; i <= end; i++) {
     const e = ranking[i];
-    const here = i === idx;
-    html += `<div${here ? ' style="margin:4px 0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:rgba(126,158,232,0.10)"' : ' style="margin:2px 0"'}>` +
-      `<span class="rk">#${i + 1}</span> ${esc(e.title || '')} <span style="opacity:.7">(${esc(e.year || '')})</span></div>`;
+    html += `<div style="margin:2px 0"><span class="rk">#${i + 1}</span> ${esc(e.title || '')} <span style="opacity:.7">(${esc(e.year || '')})</span></div>`;
   }
+  if (end < ranking.length - 1) html += `<div style="margin:2px 0;color:var(--muted)">…</div>`;
   html += `</div>`;
   return html;
 }
@@ -1284,7 +1297,8 @@ function getRandomPosterFromCache(key) {
   const idx = randomInt(0, inMem.paths.length - 1);
   const fp = inMem.paths[idx];
   if (!fp) return '';
-  return `https://image.tmdb.org/t/p/w500${fp}`;
+  // Faster initial loads; the Rank view posters are smaller anyway.
+  return `https://image.tmdb.org/t/p/w342${fp}`;
 }
 
 async function ensureTmdbPosterCache(entry) {
@@ -1301,7 +1315,12 @@ async function ensureTmdbPosterCache(entry) {
   const url = `https://api.themoviedb.org/3/${kind}/${id}/images?api_key=${TMDB_KEY}`;
   const data = await fetch(url).then(r => r.json());
   const posters = (data && data.posters) ? data.posters : [];
-  const paths = posters.map(p => p && p.file_path).filter(Boolean);
+  // Prefer English posters, then language-neutral (null), then anything else.
+  const en = posters.filter(p => p && p.file_path && p.iso_639_1 === 'en');
+  const neutral = posters.filter(p => p && p.file_path && (p.iso_639_1 === null || p.iso_639_1 === undefined || p.iso_639_1 === ''));
+  const other = posters.filter(p => p && p.file_path && p.iso_639_1 && p.iso_639_1 !== 'en');
+  const ordered = [...en, ...neutral, ...other];
+  const paths = ordered.map(p => p && p.file_path).filter(Boolean);
   const rec = { paths, at: Date.now() };
   _tmdbPosterCache.set(key, rec);
   writePosterCacheToStorage(key, rec);
@@ -1333,6 +1352,12 @@ function renderPosterBox(targetId, entry) {
   }).catch(()=>{});
 }
 
+function prefetchRankPostersForMatchup(m) {
+  if (!m) return;
+  ensureTmdbPosterCache(m.a).catch(()=>{});
+  ensureTmdbPosterCache(m.b).catch(()=>{});
+}
+
 function renderMatchupUI() {
   ensureRankPageBuilt();
   const host = document.getElementById('rank-page');
@@ -1345,6 +1370,8 @@ function renderMatchupUI() {
   // Ensure layout exists (avoid overwritten state if empty-state was shown)
   ensureRankPageBuilt();
   const m = currentMatchup;
+  // Start poster fetch immediately so the first render is faster.
+  prefetchRankPostersForMatchup(m);
   renderPosterBox('rank-poster-a', m.a);
   renderPosterBox('rank-poster-b', m.b);
 
@@ -1419,16 +1446,15 @@ function renderRankedList() {
   const countEl = document.getElementById('ranked-count');
   if (countEl) countEl.textContent = `${ranking.length.toLocaleString()} ranked`;
 
-  host.innerHTML = `<div class="ranked-grid" id="ranked-grid"></div>`;
-  const grid = document.getElementById('ranked-grid');
-  if (!grid) return;
-  slice.forEach((e, i) => {
+  host.innerHTML = `<div style="max-width:900px;margin:0 auto"><div id="ranked-basic"></div></div>`;
+  const wrap = document.getElementById('ranked-basic');
+  if (!wrap) return;
+  const lines = slice.map((e, i) => {
     const n = start + i + 1;
-    const div = document.createElement('div');
-    div.className = 'ranked-item';
-    div.innerHTML = `<div class="ranked-num">#${n}</div><div class="ranked-title">${esc(e.title || '')}<small>${esc(e.year || '')}</small></div>`;
-    grid.appendChild(div);
+    const y = e.year ? ` (${esc(e.year)})` : '';
+    return `<div style="padding:6px 2px;border-bottom:1px solid var(--border)"><span style="display:inline-block;min-width:64px;color:var(--muted);font-variant-numeric:tabular-nums">#${n}</span> ${esc(e.title || '')}${y}</div>`;
   });
+  wrap.innerHTML = lines.join('');
 }
 
 function ensureSheetId() {
@@ -2313,6 +2339,7 @@ async function confirmWatch() {
   if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
 
   const { item, btn } = pendingWatch;
+  const wasWatched = String(item.watched || '').toLowerCase() === 'yes';
   const d = document.getElementById('date-input').value;
   const ratingVal = document.getElementById('date-rating-input').value;
   const hadWatchlist = isWatchlistYes(item.watchlist);
@@ -2342,6 +2369,22 @@ async function confirmWatch() {
     btn.title = 'Log another watch';
     document.getElementById('date-modal').classList.remove('vis');
     pendingWatch = null;
+
+    // If this was newly marked watched, trigger a 10-match placement flow.
+    if (!wasWatched && item.tmdbId) {
+      try {
+        await initRankSystem();
+        const entry = { tmdbType: 'movie', tmdbId: String(item.tmdbId || '').trim(), title: item.title || '', year: item.year || '' };
+        const key = rankKeyOf(entry);
+        if (entry.tmdbId && !rankingByKey.has(key)) {
+          startPlacementForEntry(entry);
+          // Force “10 placement matchups” by capping comparisons
+          if (placementState) placementState.targetComparisons = 10;
+        }
+      } catch (e) {
+        console.error('watched->placement', e);
+      }
+    }
   } catch (e) {
     console.error(e);
     if (errEl) {
