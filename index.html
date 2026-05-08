@@ -400,6 +400,7 @@
           <option value="250">±250</option>
           <option value="500">±500</option>
         </select>
+        <button type="button" id="rank-undo-btn" onclick="undoLastMatchup()" style="background:rgba(232,126,126,0.08);border:1px solid rgba(232,126,126,0.35);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Undo</button>
         <button type="button" id="rank-next-btn" onclick="beginNextMatchup()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Next</button>
       </div>
       <div class="toolbar-gallery-chunk" id="toolbar-ranked-chunk" style="display:none">
@@ -659,6 +660,7 @@ const ELO_DEFAULT = 1500;
 const ELO_K = 32;
 let eloByKey = new Map(); // key => number
 let excludedKeys = new Set(); // key => excluded from ranking/matchups
+let lastCommittedMatchup = null; // { ts, matchup, winnerKey, loserKey, eloBefore:Map, statsBefore:Map, matchupCountBefore, lastWinnerBefore }
 
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
@@ -846,6 +848,21 @@ async function ensureRankingTabs() {
     headers: ['timestamp', 'tmdbType', 'tmdbId', 'title', 'year', 'reason'],
     minCols: 10
   });
+  await ensureTabExists({
+    title: 'MatchupUndo',
+    headers: ['timestamp', 'undoneAt', 'reason'],
+    minCols: 6
+  });
+}
+
+async function loadUndoneMatchupTimestamps() {
+  const rows = await fetchSheet('MatchupUndo', 'MatchupUndo!A2:A');
+  const s = new Set();
+  (rows || []).forEach(r => {
+    const ts = String(r?.[0] || '').trim();
+    if (ts) s.add(ts);
+  });
+  return s;
 }
 
 async function loadRankingFromSheet() {
@@ -939,16 +956,22 @@ async function writeEloToSheet() {
 }
 
 async function countMatchupsFromSheet() {
+  const undone = await loadUndoneMatchupTimestamps();
   const rows = await fetchSheet('Matchups', 'Matchups!A2:A');
-  matchupCount = (rows || []).filter(r => r && r[0]).length;
+  matchupCount = (rows || [])
+    .map(r => String(r?.[0] || '').trim())
+    .filter(ts => ts && !undone.has(ts)).length;
 }
 
 async function loadMatchupStatsFromSheet() {
   // A..G includes winner key columns
+  const undone = await loadUndoneMatchupTimestamps();
   const rows = await fetchSheet('Matchups', 'Matchups!A2:G');
   const stats = new Map();
   (rows || []).forEach(r => {
     if (!r || !r[0]) return;
+    const ts = String(r[0] || '').trim();
+    if (ts && undone.has(ts)) return;
     const aKey = `${String(r[1] || 'movie')}:${String(r[2] || '').trim()}`;
     const bKey = `${String(r[3] || 'movie')}:${String(r[4] || '').trim()}`;
     const wKey = `${String(r[5] || 'movie')}:${String(r[6] || '').trim()}`;
@@ -1045,6 +1068,51 @@ async function excludeCurrent(side) {
     console.error('excludeEntry', e);
   } finally {
     beginNextMatchup();
+  }
+}
+
+async function appendUndoRow({ ts, reason }) {
+  await ensureAccessTokenFresh();
+  const undoneAt = new Date().toISOString();
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('MatchupUndo!A:C')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ values:[[String(ts || ''), undoneAt, reason || 'undo']] }),
+  });
+  await sheetsResponseOrThrow(r, 'Append undo');
+}
+
+async function undoLastMatchup() {
+  const last = lastCommittedMatchup;
+  if (!last || !last.ts || !last.matchup) return;
+  try {
+    // Persist the undo marker so counts/stats ignore it on reload
+    await appendUndoRow({ ts: last.ts, reason: 'user_undo' });
+
+    // Restore Elo
+    for (const [k, v] of last.eloBefore.entries()) eloByKey.set(k, v);
+    // Restore stats + matchup count + last winner panel
+    for (const [k, v] of last.statsBefore.entries()) matchupStats.set(k, { ...v });
+    matchupCount = last.matchupCountBefore;
+    lastWinnerInfo = last.lastWinnerBefore;
+
+    // Re-sort ranking after Elo restore
+    sortRankingByElo();
+    await writeFullRankingToSheet();
+    await writeEloToSheet();
+
+    updateRankTotalsUI();
+    updateLastWinnerUI();
+
+    // Re-present the same matchup
+    currentMatchup = last.matchup;
+    renderMatchupUI();
+  } catch (e) {
+    console.error('undoLastMatchup', e);
+  } finally {
+    // Clear snapshot so undo is 1-level deep (prevents repeated toggling weirdness)
+    lastCommittedMatchup = null;
   }
 }
 
@@ -1148,6 +1216,22 @@ async function commitMatchup({ matchup, winner, loser }) {
   const aBefore = rankingByKey.get(aKey);
   const bBefore = rankingByKey.get(bKey);
 
+  // Snapshot for 1-step undo
+  lastCommittedMatchup = {
+    ts: null,
+    matchup: JSON.parse(JSON.stringify(matchup)),
+    winnerKey: wKey,
+    loserKey: lKey,
+    eloBefore: new Map([[wKey, eloForKey(wKey)], [lKey, eloForKey(lKey)]]),
+    statsBefore: new Map([
+      [aKey, { ...(matchupStats.get(aKey) || { wins: 0, total: 0 }) }],
+      [bKey, { ...(matchupStats.get(bKey) || { wins: 0, total: 0 }) }],
+      [wKey, { ...(matchupStats.get(wKey) || { wins: 0, total: 0 }) }],
+    ]),
+    matchupCountBefore: matchupCount,
+    lastWinnerBefore: lastWinnerInfo ? { ...lastWinnerInfo } : null
+  };
+
   const wRankBefore = rankingByKey.get(wKey);
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
   sortRankingByElo();
@@ -1158,6 +1242,7 @@ async function commitMatchup({ matchup, winner, loser }) {
   await writeEloToSheet();
 
   const ts = new Date().toISOString();
+  if (lastCommittedMatchup) lastCommittedMatchup.ts = ts;
   await appendMatchupRow([
     ts,
     matchup.a.tmdbType || 'movie', String(matchup.a.tmdbId || ''),
@@ -1342,6 +1427,62 @@ function ensureRankPageBuilt() {
   if (pb) pb.addEventListener('click', () => chooseSide('b'));
   if (pa) pa.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chooseSide('a'); } });
   if (pb) pb.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chooseSide('b'); } });
+
+  // Review popups for context list
+  host.addEventListener('click', onRankContextClick);
+}
+
+function libItemForRankEntry(entry) {
+  const id = String(entry?.tmdbId || '').trim();
+  if (!id) return null;
+  return allItems.find(i => i && i._type === (entry.tmdbType || 'movie') && String(i.tmdbId || '').trim() === id) || null;
+}
+
+let _rankReviewTip = null;
+function closeRankReviewTip() {
+  if (_rankReviewTip) _rankReviewTip.remove();
+  _rankReviewTip = null;
+}
+
+function openRankReviewTip(item, x, y) {
+  closeRankReviewTip();
+  const entries = parseReviewEntries(item?.reviews || '');
+  if (!entries.length) return;
+
+  const tip = document.createElement('div');
+  tip.className = 'popup vis';
+  tip.style.position = 'fixed';
+  tip.style.left = Math.min(window.innerWidth - 360, Math.max(12, x + 12)) + 'px';
+  tip.style.top = Math.min(window.innerHeight - 280, Math.max(12, y + 12)) + 'px';
+  tip.style.bottom = 'auto';
+  tip.style.width = '340px';
+  tip.style.maxHeight = '260px';
+  tip.style.overflow = 'auto';
+  tip.innerHTML =
+    `<h5>Your review</h5>` +
+    entries.slice(0, 6).map(e => `<div style="margin-bottom:10px"><div style="color:var(--text);font-size:11px;font-weight:600">${esc(e.date || '')}</div><div style="margin-top:4px;color:var(--muted);white-space:pre-wrap">${esc(e.text || '')}</div></div>`).join('') +
+    (entries.length > 6 ? `<div style="color:var(--muted);font-size:11px">…and ${entries.length - 6} more</div>` : '');
+
+  document.body.appendChild(tip);
+  _rankReviewTip = tip;
+  setTimeout(() => {
+    document.addEventListener('click', (ev) => {
+      if (_rankReviewTip && !_rankReviewTip.contains(ev.target)) closeRankReviewTip();
+    }, { once:true });
+  }, 0);
+}
+
+function onRankContextClick(e) {
+  const a = e.target?.closest?.('a[data-rk="1"]');
+  if (!a) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const key = String(a.getAttribute('data-key') || '');
+  const entry = ranking.find(r => rankKeyOf(r) === key);
+  if (!entry) return;
+  const item = libItemForRankEntry(entry);
+  if (!item || !String(item.reviews || '').trim()) return;
+  openRankReviewTip(item, e.clientX || 0, e.clientY || 0);
 }
 
 function rankContextBlockFor(entry) {
@@ -1355,8 +1496,12 @@ function rankContextBlockFor(entry) {
   for (let i = start; i <= end; i++) {
     const e = ranking[i];
     const isFocus = i === idx;
-    html += `<div style="margin:2px 0;${isFocus ? 'padding:6px 8px;border-radius:8px;background:rgba(126,158,232,0.16);border:1px solid rgba(126,158,232,0.35);font-size:13px;font-weight:600;' : ''}">` +
-      `<span class="rk">#${i + 1}</span> ${esc(e.title || '')} <span style="opacity:.7;font-weight:500">(${esc(e.year || '')})</span></div>`;
+    const rowStyle = `margin:2px 0;${isFocus ? 'padding:6px 8px;border-radius:8px;background:rgba(126,158,232,0.16);border:1px solid rgba(126,158,232,0.35);font-size:13px;font-weight:600;' : ''}`;
+    const linkStyle = `color:inherit;text-decoration:none;`;
+    html += `<div style="${rowStyle}">` +
+      `<span class="rk">#${i + 1}</span> ` +
+      `<a data-rk="1" data-key="${esc(rankKeyOf(e))}" href="#" style="${linkStyle}" title="Click to view your review (if any)">${esc(e.title || '')}</a> ` +
+      `<span style="opacity:.7;font-weight:500">(${esc(e.year || '')})</span></div>`;
   }
   if (end < ranking.length - 1) html += `<div style="margin:2px 0;color:var(--muted)">…</div>`;
   html += `</div>`;
@@ -1368,6 +1513,14 @@ function updateRankTotalsUI() {
   if (!el) return;
   const pool = getRankPool();
   el.textContent = `${pool.length.toLocaleString()} movies • ${matchupCount.toLocaleString()} matchups`;
+
+  const ub = document.getElementById('rank-undo-btn');
+  if (ub) {
+    const can = !!(lastCommittedMatchup && lastCommittedMatchup.ts && lastCommittedMatchup.matchup);
+    ub.disabled = !can;
+    ub.style.opacity = can ? '1' : '0.45';
+    ub.style.cursor = can ? 'pointer' : 'not-allowed';
+  }
 }
 
 function updateLastWinnerUI() {
