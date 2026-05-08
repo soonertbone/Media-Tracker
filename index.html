@@ -871,18 +871,6 @@ async function ensureRankingTabs() {
   });
 }
 
-async function loadRankMeta() {
-  const rows = await fetchSheet('RankMeta', 'RankMeta!A2:C');
-  const m = new Map();
-  (rows || []).forEach(r => {
-    const k = String(r?.[0] || '').trim();
-    const v = String(r?.[1] ?? '').trim();
-    if (k) m.set(k, v);
-  });
-  const mc = Number(m.get('matchupCount') || 0);
-  matchupCount = Number.isFinite(mc) ? mc : 0;
-}
-
 async function setRankMeta(key, value) {
   await ensureAccessTokenFresh();
   const nowIso = new Date().toISOString();
@@ -1159,7 +1147,6 @@ async function appendMatchupRow(row) {
     body: JSON.stringify({ values:[row] }),
   });
   await sheetsResponseOrThrow(r, 'Append matchup');
-  matchupCount += 1;
 }
 
 async function appendExcludedRow({ entry, reason }) {
@@ -1240,7 +1227,7 @@ async function undoLastMatchup() {
     for (const [k, v] of last.statsBefore.entries()) matchupStats.set(k, { ...v });
     matchupCount = last.matchupCountBefore;
     lastWinnerInfo = last.lastWinnerBefore;
-    lastLoserInfo = null;
+    lastLoserInfo = last.lastLoserBefore;
 
     // Re-sort ranking after Elo restore
     sortRankingByElo();
@@ -1280,7 +1267,9 @@ async function initRankSystem() {
     await loadRankingFromSheet();
     await initRankingIfEmpty();
     await loadExcludedFromSheet();
-    await loadRankMeta();
+    // True count from Matchups (RankMeta can be stale); then sync meta
+    await countMatchupsFromSheet();
+    await setRankMeta('matchupCount', matchupCount);
     await loadRankStats();
     await loadEloFromSheet();
     ensureEloForRanking();
@@ -1375,14 +1364,18 @@ async function commitMatchup({ matchup, winner, loser }) {
       [wKey, { ...(matchupStats.get(wKey) || { wins: 0, total: 0 }) }],
     ]),
     matchupCountBefore: matchupCount,
-    lastWinnerBefore: lastWinnerInfo ? { ...lastWinnerInfo } : null
+    lastWinnerBefore: lastWinnerInfo ? { ...lastWinnerInfo } : null,
+    lastLoserBefore: lastLoserInfo ? { ...lastLoserInfo } : null
   };
 
   const wRankBefore = rankingByKey.get(wKey);
+  const lRankBefore = rankingByKey.get(lKey);
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
   sortRankingByElo();
   const wAfter = rankingByKey.get(wKey);
+  const lAfter = rankingByKey.get(lKey);
   const movedBy = (Number.isFinite(wRankBefore) && Number.isFinite(wAfter)) ? (wRankBefore - wAfter) : 0;
+  const movedDownBy = (Number.isFinite(lRankBefore) && Number.isFinite(lAfter)) ? (lAfter - lRankBefore) : 0;
 
   _rankingDirty = true;
 
@@ -1426,6 +1419,9 @@ async function commitMatchup({ matchup, winner, loser }) {
     key: lKey,
     title: loser.title || '',
     year: loser.year || '',
+    movedDown: movedDownBy > 0,
+    movedDownBy: movedDownBy > 0 ? movedDownBy : 0,
+    rankAfter: Number.isFinite(lAfter) ? (lAfter + 1) : null,
     wins: ls.wins,
     total: ls.total,
     winPct: ls.total ? (ls.wins / ls.total) : 0,
@@ -1695,10 +1691,16 @@ function updateLastWinnerUI() {
     ? `Moved up <span class="rk">${lastWinnerInfo.movedBy}</span> spot(s) to <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`
     : `Stayed at <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`;
   const loser = lastLoserInfo;
+  const loserMovedLine = loser && Number.isFinite(loser.rankAfter)
+    ? (loser.movedDown && loser.movedDownBy > 0)
+      ? `Moved down <span class="rk">${loser.movedDownBy}</span> spot(s) to <span class="rk">#${loser.rankAfter}</span>.`
+      : `Stayed at <span class="rk">#${loser.rankAfter}</span>.`
+    : '';
   const loserBlock = loser ? `
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
       <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Loser</div>
       <div style="margin-top:6px"><span class="me">${esc(loser.title)}</span> <span style="opacity:.7">(${esc(loser.year)})</span></div>
+      ${loserMovedLine ? `<div style="margin-top:8px">${loserMovedLine}</div>` : ''}
       ${Number.isFinite(loser.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${loser.eloAfter}</span> ${Number.isFinite(loser.eloChange) ? `<span style="color:var(--muted)">(${loser.eloChange >= 0 ? '+' : ''}${loser.eloChange})</span>` : ''}</div>` : ''}
       <div style="margin-top:8px">Win rate: <span class="rk">${(loser.winPct * 100).toFixed(1)}%</span></div>
       <div>Matchups: <span class="rk">${loser.total}</span> • Wins: <span class="rk">${loser.wins}</span></div>
