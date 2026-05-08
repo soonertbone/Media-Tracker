@@ -661,6 +661,12 @@ const ELO_K = 32;
 let eloByKey = new Map(); // key => number
 let excludedKeys = new Set(); // key => excluded from ranking/matchups
 let lastCommittedMatchup = null; // { ts, matchup, winnerKey, loserKey, eloBefore:Map, statsBefore:Map, matchupCountBefore, lastWinnerBefore }
+let lastLoserInfo = null;
+
+// Long-term scaling: avoid O(matchups) scans per load/matchup
+let _rankStatsRowByKey = new Map(); // key => sheet row number (2+)
+let _eloRowByKey = new Map(); // key => sheet row number (2+)
+let _rankingDirty = false;
 
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
@@ -853,6 +859,104 @@ async function ensureRankingTabs() {
     headers: ['timestamp', 'undoneAt', 'reason'],
     minCols: 6
   });
+  await ensureTabExists({
+    title: 'RankMeta',
+    headers: ['key', 'value', 'updatedAt'],
+    minCols: 6
+  });
+  await ensureTabExists({
+    title: 'RankStats',
+    headers: ['tmdbType', 'tmdbId', 'wins', 'total', 'updatedAt'],
+    minCols: 8
+  });
+}
+
+async function loadRankMeta() {
+  const rows = await fetchSheet('RankMeta', 'RankMeta!A2:C');
+  const m = new Map();
+  (rows || []).forEach(r => {
+    const k = String(r?.[0] || '').trim();
+    const v = String(r?.[1] ?? '').trim();
+    if (k) m.set(k, v);
+  });
+  const mc = Number(m.get('matchupCount') || 0);
+  matchupCount = Number.isFinite(mc) ? mc : 0;
+}
+
+async function setRankMeta(key, value) {
+  await ensureAccessTokenFresh();
+  const nowIso = new Date().toISOString();
+  // Load existing rows to find key (RankMeta is tiny)
+  const rows = await fetchSheet('RankMeta', 'RankMeta!A2:C');
+  let rowNum = null;
+  for (let i = 0; i < (rows || []).length; i++) {
+    if (String(rows[i]?.[0] || '').trim() === key) { rowNum = i + 2; break; }
+  }
+  if (!rowNum) {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('RankMeta!A:C')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+    const r = await fetch(url, { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+      body: JSON.stringify({ values:[[key, String(value), nowIso]] }) });
+    await sheetsResponseOrThrow(r, 'Append RankMeta');
+    return;
+  }
+  const data = [{ range:`RankMeta!A${rowNum}:C${rowNum}`, values:[[key, String(value), nowIso]] }];
+  const wr = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`, {
+    method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ valueInputOption:'RAW', data })
+  });
+  await sheetsResponseOrThrow(wr, 'Update RankMeta');
+}
+
+async function loadRankStats() {
+  const rows = await fetchSheet('RankStats', 'RankStats!A2:E');
+  const stats = new Map();
+  const rowBy = new Map();
+  (rows || []).forEach((r, idx) => {
+    if (!r || !r[1]) return;
+    const key = `${String(r[0] || 'movie')}:${String(r[1] || '').trim()}`;
+    if (key.endsWith(':')) return;
+    const wins = Number(r[2] || 0);
+    const total = Number(r[3] || 0);
+    stats.set(key, { wins: Number.isFinite(wins) ? wins : 0, total: Number.isFinite(total) ? total : 0 });
+    rowBy.set(key, idx + 2);
+  });
+  matchupStats = stats;
+  _rankStatsRowByKey = rowBy;
+}
+
+async function upsertRankStatsRow(key) {
+  if (_rankStatsRowByKey.has(key)) return _rankStatsRowByKey.get(key);
+  const [tmdbType, tmdbId] = key.split(':');
+  const nowIso = new Date().toISOString();
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('RankStats!A:E')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const s = statsForKey(key);
+  const r = await fetch(url, { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ values:[[tmdbType || 'movie', tmdbId || '', s.wins || 0, s.total || 0, nowIso]] }) });
+  const d = await r.json();
+  if (!r.ok) await sheetsResponseOrThrow(new Response(JSON.stringify(d), { status:r.status }), 'Append RankStats');
+  const updatedRow = parseUpdatedRow(d.updates?.updatedRange || '');
+  if (updatedRow) _rankStatsRowByKey.set(key, updatedRow);
+  return updatedRow;
+}
+
+async function flushRankStats(keys) {
+  await ensureAccessTokenFresh();
+  const nowIso = new Date().toISOString();
+  const data = [];
+  for (const key of keys) {
+    if (!key || key.endsWith(':')) continue;
+    let rowNum = _rankStatsRowByKey.get(key);
+    if (!rowNum) rowNum = await upsertRankStatsRow(key);
+    if (!rowNum) continue;
+    const s = statsForKey(key);
+    data.push({ range:`RankStats!A${rowNum}:E${rowNum}`, values:[[key.split(':')[0] || 'movie', key.split(':')[1] || '', s.wins || 0, s.total || 0, nowIso]] });
+  }
+  if (!data.length) return;
+  const wr = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`, {
+    method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ valueInputOption:'RAW', data })
+  });
+  await sheetsResponseOrThrow(wr, 'Save RankStats');
 }
 
 async function loadUndoneMatchupTimestamps() {
@@ -887,13 +991,20 @@ async function loadRankingFromSheet() {
 async function loadEloFromSheet() {
   const rows = await fetchSheet('Elo', 'Elo!A2:D');
   const m = new Map();
+  const rowBy = new Map();
   (rows || []).forEach(r => {
     if (!r || !r[1]) return;
     const key = `${String(r[0] || 'movie')}:${String(r[1] || '').trim()}`;
     const elo = Number(r[2]);
     if (!key.endsWith(':') && Number.isFinite(elo)) m.set(key, elo);
   });
+  (rows || []).forEach((r, idx) => {
+    if (!r || !r[1]) return;
+    const key = `${String(r[0] || 'movie')}:${String(r[1] || '').trim()}`;
+    if (!key.endsWith(':')) rowBy.set(key, idx + 2);
+  });
   eloByKey = m;
+  _eloRowByKey = rowBy;
 }
 
 async function loadExcludedFromSheet() {
@@ -953,6 +1064,39 @@ async function writeEloToSheet() {
       body: JSON.stringify({ valueInputOption:'RAW', data }) }
   );
   await sheetsResponseOrThrow(wr, 'Save Elo');
+}
+
+async function upsertEloRow(key) {
+  if (_eloRowByKey.has(key)) return _eloRowByKey.get(key);
+  const [tmdbType, tmdbId] = key.split(':');
+  const nowIso = new Date().toISOString();
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Elo!A:D')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const r = await fetch(url, { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ values:[[tmdbType || 'movie', tmdbId || '', Math.round(eloForKey(key)), nowIso]] }) });
+  const d = await r.json();
+  if (!r.ok) await sheetsResponseOrThrow(new Response(JSON.stringify(d), { status:r.status }), 'Append Elo');
+  const updatedRow = parseUpdatedRow(d.updates?.updatedRange || '');
+  if (updatedRow) _eloRowByKey.set(key, updatedRow);
+  return updatedRow;
+}
+
+async function flushElo(keys) {
+  await ensureAccessTokenFresh();
+  const nowIso = new Date().toISOString();
+  const data = [];
+  for (const key of keys) {
+    if (!key || key.endsWith(':')) continue;
+    let rowNum = _eloRowByKey.get(key);
+    if (!rowNum) rowNum = await upsertEloRow(key);
+    if (!rowNum) continue;
+    data.push({ range:`Elo!A${rowNum}:D${rowNum}`, values:[[key.split(':')[0] || 'movie', key.split(':')[1] || '', Math.round(eloForKey(key)), nowIso]] });
+  }
+  if (!data.length) return;
+  const wr = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`, {
+    method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ valueInputOption:'RAW', data })
+  });
+  await sheetsResponseOrThrow(wr, 'Save Elo (partial)');
 }
 
 async function countMatchupsFromSheet() {
@@ -1096,11 +1240,13 @@ async function undoLastMatchup() {
     for (const [k, v] of last.statsBefore.entries()) matchupStats.set(k, { ...v });
     matchupCount = last.matchupCountBefore;
     lastWinnerInfo = last.lastWinnerBefore;
+    lastLoserInfo = null;
 
     // Re-sort ranking after Elo restore
     sortRankingByElo();
-    await writeFullRankingToSheet();
-    await writeEloToSheet();
+    await setRankMeta('matchupCount', matchupCount);
+    await flushElo([...last.eloBefore.keys()]);
+    await flushRankStats([...last.statsBefore.keys()]);
 
     updateRankTotalsUI();
     updateLastWinnerUI();
@@ -1134,12 +1280,12 @@ async function initRankSystem() {
     await loadRankingFromSheet();
     await initRankingIfEmpty();
     await loadExcludedFromSheet();
+    await loadRankMeta();
+    await loadRankStats();
     await loadEloFromSheet();
     ensureEloForRanking();
     pruneExcludedFromRanking();
     sortRankingByElo();
-    await countMatchupsFromSheet();
-    await loadMatchupStatsFromSheet();
     updateRankTotalsUI();
   } catch (e) {
     console.error(e);
@@ -1238,8 +1384,7 @@ async function commitMatchup({ matchup, winner, loser }) {
   const wAfter = rankingByKey.get(wKey);
   const movedBy = (Number.isFinite(wRankBefore) && Number.isFinite(wAfter)) ? (wRankBefore - wAfter) : 0;
 
-  await writeFullRankingToSheet();
-  await writeEloToSheet();
+  _rankingDirty = true;
 
   const ts = new Date().toISOString();
   if (lastCommittedMatchup) lastCommittedMatchup.ts = ts;
@@ -1256,8 +1401,13 @@ async function commitMatchup({ matchup, winner, loser }) {
   ]);
 
   bumpStatsForMatchup({ aKey, bKey, wKey });
+  matchupCount += 1;
+  await setRankMeta('matchupCount', matchupCount);
+  await flushElo([wKey, lKey]);
+  await flushRankStats([aKey, bKey, wKey]);
 
   const s = statsForKey(wKey);
+  const ls = statsForKey(lKey);
   lastWinnerInfo = {
     key: wKey,
     title: winner.title || '',
@@ -1270,6 +1420,17 @@ async function commitMatchup({ matchup, winner, loser }) {
     winPct: s.total ? (s.wins / s.total) : 0,
     eloAfter: Math.round(eloForKey(wKey)),
     eloChange: Math.round(eloDelta.winnerEloAfter - eloDelta.winnerEloBefore),
+    ts
+  };
+  lastLoserInfo = {
+    key: lKey,
+    title: loser.title || '',
+    year: loser.year || '',
+    wins: ls.wins,
+    total: ls.total,
+    winPct: ls.total ? (ls.wins / ls.total) : 0,
+    eloAfter: Math.round(eloForKey(lKey)),
+    eloChange: Math.round(eloDelta.loserEloAfter - eloDelta.loserEloBefore),
     ts
   };
 
@@ -1533,12 +1694,25 @@ function updateLastWinnerUI() {
   const movedLine = lastWinnerInfo.moved
     ? `Moved up <span class="rk">${lastWinnerInfo.movedBy}</span> spot(s) to <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`
     : `Stayed at <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`;
+  const loser = lastLoserInfo;
+  const loserBlock = loser ? `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Loser</div>
+      <div style="margin-top:6px"><span class="me">${esc(loser.title)}</span> <span style="opacity:.7">(${esc(loser.year)})</span></div>
+      ${Number.isFinite(loser.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${loser.eloAfter}</span> ${Number.isFinite(loser.eloChange) ? `<span style="color:var(--muted)">(${loser.eloChange >= 0 ? '+' : ''}${loser.eloChange})</span>` : ''}</div>` : ''}
+      <div style="margin-top:8px">Win rate: <span class="rk">${(loser.winPct * 100).toFixed(1)}%</span></div>
+      <div>Matchups: <span class="rk">${loser.total}</span> • Wins: <span class="rk">${loser.wins}</span></div>
+    </div>
+  ` : '';
+
   el.innerHTML = `
-    <div><span class="me">${esc(lastWinnerInfo.title)}</span> <span style="opacity:.7">(${esc(lastWinnerInfo.year)})</span></div>
+    <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Winner</div>
+    <div style="margin-top:6px"><span class="me">${esc(lastWinnerInfo.title)}</span> <span style="opacity:.7">(${esc(lastWinnerInfo.year)})</span></div>
     <div style="margin-top:8px">${movedLine}</div>
     ${Number.isFinite(lastWinnerInfo.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${lastWinnerInfo.eloAfter}</span> ${Number.isFinite(lastWinnerInfo.eloChange) ? `<span style="color:var(--muted)">(${lastWinnerInfo.eloChange >= 0 ? '+' : ''}${lastWinnerInfo.eloChange})</span>` : ''}</div>` : ''}
     <div style="margin-top:8px">Win rate: <span class="rk">${(lastWinnerInfo.winPct * 100).toFixed(1)}%</span></div>
     <div>Matchups: <span class="rk">${lastWinnerInfo.total}</span> • Wins: <span class="rk">${lastWinnerInfo.wins}</span></div>
+    ${loserBlock}
     <div style="margin-top:10px;color:var(--muted);font-size:11px">Last updated: ${esc(lastWinnerInfo.ts)}</div>
   `;
 }
@@ -1650,8 +1824,14 @@ function renderMatchupUI() {
 
   const ca = document.getElementById('rank-context-a');
   const cb = document.getElementById('rank-context-b');
-  if (ca) ca.innerHTML = rankContextBlockFor(m.a);
-  if (cb) cb.innerHTML = rankContextBlockFor(m.b);
+  // Order left sidebar by current rank (higher ranked first)
+  const aIdx = rankingByKey.get(rankKeyOf(m.a));
+  const bIdx = rankingByKey.get(rankKeyOf(m.b));
+  const aHigher = Number.isFinite(aIdx) && Number.isFinite(bIdx) ? (aIdx <= bIdx) : true;
+  const first = aHigher ? m.a : m.b;
+  const second = aHigher ? m.b : m.a;
+  if (ca) ca.innerHTML = rankContextBlockFor(first);
+  if (cb) cb.innerHTML = rankContextBlockFor(second);
   updateLastWinnerUI();
 }
 
@@ -3589,6 +3769,10 @@ function showView(view) {
   }
 
   if (isRanked) {
+    // Only persist Rankings ordering when needed (avoids per-matchup full rewrites).
+    if (_rankingDirty) {
+      writeFullRankingToSheet().then(() => { _rankingDirty = false; }).catch(e => console.error('writeFullRankingToSheet', e));
+    }
     renderRankedList();
   }
 }
