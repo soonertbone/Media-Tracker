@@ -655,6 +655,37 @@ let currentMatchup = null; // {a,b,poolKey,range}
 let _rankInited = false;
 let placementState = null; // { entryKey, remaining }
 
+// Serialized rank picks — each choice is fully committed before the next runs (no lost / interleaved logging)
+const matchupPickQueue = [];
+let matchupPickDrainRunning = false;
+
+function cloneMatchup(m) {
+  return JSON.parse(JSON.stringify(m));
+}
+
+async function drainMatchupPickQueue() {
+  if (matchupPickDrainRunning) return;
+  matchupPickDrainRunning = true;
+  try {
+    while (matchupPickQueue.length > 0) {
+      const { side, matchup } = matchupPickQueue.shift();
+      const winner = side === 'a' ? matchup.a : matchup.b;
+      const loser = side === 'a' ? matchup.b : matchup.a;
+      try {
+        if (matchup.isPlacement) await commitPlacementChoice({ matchup, winner, loser });
+        else await commitMatchup({ matchup, winner, loser });
+      } catch (e) {
+        console.error('drainMatchupPickQueue', e);
+      }
+      // Placement advances inside commitPlacementChoice; normal battles need next pair here exactly once.
+      if (!matchup.isPlacement) beginNextMatchup();
+    }
+  } finally {
+    matchupPickDrainRunning = false;
+    if (matchupPickQueue.length > 0) void drainMatchupPickQueue();
+  }
+}
+
 // Elo ranking
 const ELO_DEFAULT = 1500;
 const ELO_K = 32;
@@ -1511,23 +1542,11 @@ function beginNextMatchup() {
   renderMatchupUI();
 }
 
-async function chooseSide(side) {
+function chooseSide(side) {
   if (!currentMatchup) return;
-  const m = currentMatchup;
-  currentMatchup = null; // prevent double submits
-  try {
-    const winner = side === 'a' ? m.a : m.b;
-    const loser  = side === 'a' ? m.b : m.a;
-    if (m && m.isPlacement) {
-      await commitPlacementChoice({ matchup: m, winner, loser });
-    } else {
-      await commitMatchup({ matchup: m, winner, loser });
-    }
-  } catch (e) {
-    console.error(e);
-  } finally {
-    if (!(m && m.isPlacement)) beginNextMatchup();
-  }
+  matchupPickQueue.push({ side, matchup: cloneMatchup(currentMatchup) });
+  currentMatchup = null;
+  void drainMatchupPickQueue();
 }
 
 // ── Rank UI ───────────────────────────────────────────────────
@@ -1854,9 +1873,10 @@ function onRankRangeChanged() {
 
 let _rankKeyHandlerInstalled = false;
 function onRankKeydown(e) {
-  if (e.key === 'ArrowLeft') { e.preventDefault(); chooseSide('a'); }
-  else if (e.key === 'ArrowRight') { e.preventDefault(); chooseSide('b'); }
-  else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); beginNextMatchup(); }
+  // Avoid enqueueing duplicates while a key is held (key repeat), which used to corrupt state vs. slow commits.
+  if (e.key === 'ArrowLeft') { if (e.repeat) return; e.preventDefault(); chooseSide('a'); }
+  else if (e.key === 'ArrowRight') { if (e.repeat) return; e.preventDefault(); chooseSide('b'); }
+  else if (e.key === 'n' || e.key === 'N') { if (e.repeat) return; e.preventDefault(); beginNextMatchup(); }
 }
 
 function installRankKeyboard() {
