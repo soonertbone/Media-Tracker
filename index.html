@@ -309,6 +309,36 @@
   .ring-info { font-size:13px; line-height:1.8; }
   .ring-info span { color:var(--muted); font-size:11px; display:block; }
 
+  /* Rank page */
+  #rank-page { display:none; flex:1; overflow:hidden; }
+  #rank-page.vis { display:flex; }
+  .rank-layout { display:grid; grid-template-columns:280px 1fr 320px; gap:16px; padding:16px; width:100%; overflow:hidden; }
+  @media (max-width:980px) { .rank-layout { grid-template-columns:1fr; } }
+  .rank-panel { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+  .rank-panel h3 { font-family:'DM Serif Display',serif; font-size:14px; color:var(--accent); padding:14px 14px 10px; border-bottom:1px solid var(--border); }
+  .rank-panel .body { padding:12px 14px; overflow:auto; }
+  .rank-context { font-size:12px; color:var(--muted); line-height:1.55; }
+  .rank-context .rk { color:var(--text); font-weight:600; }
+  .rank-context .me { color:var(--accent2); font-weight:600; }
+  .rank-vs { display:flex; flex-direction:column; gap:12px; align-items:center; justify-content:center; padding:12px; height:100%; }
+  .rank-vs-row { display:grid; grid-template-columns:1fr 80px 1fr; gap:14px; width:100%; max-width:980px; align-items:center; }
+  @media (max-width:980px) { .rank-vs-row { grid-template-columns:1fr; } }
+  .vs-chip { text-align:center; font-family:'DM Serif Display',serif; color:var(--accent); font-size:18px; }
+  .rank-poster { background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; cursor:pointer; position:relative; aspect-ratio:2/3; }
+  .rank-poster img { width:100%; height:100%; object-fit:cover; display:block; }
+  .rank-poster .cap { position:absolute; left:0; right:0; bottom:0; padding:10px 12px; background:linear-gradient(to top, rgba(0,0,0,.78), rgba(0,0,0,0)); color:#fff; font-size:13px; }
+  .rank-poster .cap small { display:block; opacity:.75; font-size:11px; margin-top:2px; }
+  .rank-hint { font-size:11px; color:var(--muted); text-align:center; }
+
+  /* Ranked list page */
+  #ranked-page { display:none; flex:1; overflow-y:auto; padding:18px 16px; }
+  #ranked-page.vis { display:block; }
+  .ranked-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; align-content:start; }
+  .ranked-item { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:10px 12px; display:flex; gap:10px; align-items:flex-start; }
+  .ranked-num { font-weight:800; color:var(--accent2); min-width:48px; text-align:right; }
+  .ranked-title { font-size:13px; line-height:1.25; }
+  .ranked-title small { display:block; color:var(--muted); margin-top:2px; }
+
   .spinner { width:36px; height:36px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
 </style>
@@ -335,6 +365,8 @@
       <h1 class="toolbar-brand">Media Vault</h1>
       <div class="seg-toolbar" role="group" aria-label="View">
         <button type="button" class="type-btn active" id="nav-gallery" onclick="showView('gallery')">Gallery</button>
+        <button type="button" class="type-btn" id="nav-rank" onclick="showView('rank')">Rank</button>
+        <button type="button" class="type-btn" id="nav-ranked" onclick="showView('ranked')">List</button>
         <button type="button" class="type-btn" id="nav-stats" onclick="showView('stats')">Stats</button>
       </div>
       <div class="toolbar-gallery-chunk" id="toolbar-gallery-chunk">
@@ -352,6 +384,35 @@
         </button>
         <button type="button" id="add-btn" onclick="openAddModal()" title="Add a new movie or TV show">＋ Add</button>
         <button type="button" id="large-target-btn" onclick="toggleLargeTargets()" title="Toggle large touch targets (Vision Pro)">⊕</button>
+      </div>
+      <div class="toolbar-gallery-chunk" id="toolbar-rank-chunk" style="display:none">
+        <span class="toolbar-count" id="rank-totals"></span>
+        <label class="fl" style="margin-left:4px">Pool</label>
+        <select id="rank-pool" onchange="onRankPoolChanged()" style="padding:6px 10px;border-radius:8px">
+          <option value="0">All</option>
+          <option value="250">Top 250</option>
+          <option value="500">Top 500</option>
+          <option value="1000">Top 1000</option>
+        </select>
+        <label class="fl" style="margin-left:4px">Range</label>
+        <select id="rank-range" onchange="onRankRangeChanged()" style="padding:6px 10px;border-radius:8px">
+          <option value="100">±100</option>
+          <option value="250">±250</option>
+          <option value="500">±500</option>
+        </select>
+        <button type="button" id="rank-next-btn" onclick="beginNextMatchup()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Next</button>
+      </div>
+      <div class="toolbar-gallery-chunk" id="toolbar-ranked-chunk" style="display:none">
+        <span class="toolbar-count" id="ranked-count"></span>
+        <label class="fl" style="margin-left:4px">Show</label>
+        <select id="ranked-page-size" onchange="renderRankedList()" style="padding:6px 10px;border-radius:8px">
+          <option value="250">250</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+          <option value="0">All</option>
+        </select>
+        <label class="fl" style="margin-left:4px">Page</label>
+        <select id="ranked-page-num" onchange="renderRankedList()" style="padding:6px 10px;border-radius:8px"></select>
       </div>
     </div>
     <div class="filter-panel" id="filter-panel" role="region" aria-label="Filters">
@@ -433,6 +494,8 @@
     </div>
   </div>
   <div id="grid"><div id="loading-state"><div class="spinner"></div><p>Loading your library…</p></div></div>
+  <div id="rank-page"></div>
+  <div id="ranked-page"></div>
   <div id="stats-page"></div>
 </div>
 
@@ -579,6 +642,18 @@ let pendingReview = null;
 let openPopup    = null;
 let interactiveLogin = false;
 
+// Ranking (Flickchart-like)
+let ranking = []; // ordered list of rank entries (index 0 = #1)
+let rankingByKey = new Map(); // key => index
+let matchupCount = 0;
+let matchupStats = new Map(); // key => { wins, total }
+let lastWinnerInfo = null;
+let rankPoolLimit = 0; // 0 = all
+let rankRange = 100;
+let currentMatchup = null; // {a,b,poolKey,range}
+let _rankInited = false;
+let placementState = null; // { entry, low, high, comparisons, localRefines }
+
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
   const s = document.createElement('script');
@@ -690,7 +765,7 @@ async function sheetsResponseOrThrow(r, actionLabel) {
 function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
-  loadSheetData();
+  loadSheetData().then(() => initRankSystem()).catch(e => console.error('initRankSystem', e));
   loadWatchLog();
 }
 
@@ -720,6 +795,640 @@ async function loadSheetData() {
     console.error(e);
     showLoading(false);
   }
+}
+
+// ── Rankings + Matchups sheets ────────────────────────────────
+function rankKeyOf(entry) {
+  return `${entry.tmdbType || 'movie'}:${String(entry.tmdbId || '').trim()}`;
+}
+
+function rebuildRankingIndex() {
+  rankingByKey = new Map();
+  for (let i = 0; i < ranking.length; i++) rankingByKey.set(rankKeyOf(ranking[i]), i);
+}
+
+function moviesSeenFromLibrary() {
+  // Flickchart-like experience: focus on watched movies
+  return allItems
+    .filter(i => i && i._type === 'movie' && String(i.watched || '').toLowerCase() === 'yes' && String(i.tmdbId || '').trim())
+    .map(i => ({
+      tmdbType: 'movie',
+      tmdbId: String(i.tmdbId).trim(),
+      title: i.title || '',
+      year: i.year || ''
+    }));
+}
+
+async function ensureRankingTabs() {
+  await ensureTabExists({
+    title: 'Rankings',
+    headers: ['tmdbType', 'tmdbId', 'title', 'year', 'rankIndex', 'updatedAt'],
+    minCols: 8
+  });
+  await ensureTabExists({
+    title: 'Matchups',
+    headers: ['timestamp', 'a_tmdbType', 'a_tmdbId', 'b_tmdbType', 'b_tmdbId', 'winner_tmdbType', 'winner_tmdbId', 'a_rank_before', 'b_rank_before', 'winner_rank_after', 'rangeUsed', 'poolFilter'],
+    minCols: 14
+  });
+}
+
+async function loadRankingFromSheet() {
+  const rows = await fetchSheet('Rankings', 'Rankings!A2:F');
+  const entries = (rows || [])
+    .filter(r => r && r[1])
+    .map(r => ({
+      tmdbType: String(r[0] || 'movie'),
+      tmdbId: String(r[1] || '').trim(),
+      title: String(r[2] || ''),
+      year: String(r[3] || ''),
+      rankIndex: Number(r[4] || 0),
+      updatedAt: String(r[5] || '')
+    }));
+  // Prefer explicit rankIndex if present; otherwise keep sheet order.
+  const hasIdx = entries.some(e => Number.isFinite(e.rankIndex) && e.rankIndex > 0);
+  if (hasIdx) entries.sort((a, b) => (a.rankIndex || 0) - (b.rankIndex || 0));
+  ranking = entries.map(e => ({ tmdbType: e.tmdbType, tmdbId: e.tmdbId, title: e.title, year: e.year }));
+  rebuildRankingIndex();
+}
+
+async function countMatchupsFromSheet() {
+  const rows = await fetchSheet('Matchups', 'Matchups!A2:A');
+  matchupCount = (rows || []).filter(r => r && r[0]).length;
+}
+
+async function loadMatchupStatsFromSheet() {
+  // A..G includes winner key columns
+  const rows = await fetchSheet('Matchups', 'Matchups!A2:G');
+  const stats = new Map();
+  (rows || []).forEach(r => {
+    if (!r || !r[0]) return;
+    const aKey = `${String(r[1] || 'movie')}:${String(r[2] || '').trim()}`;
+    const bKey = `${String(r[3] || 'movie')}:${String(r[4] || '').trim()}`;
+    const wKey = `${String(r[5] || 'movie')}:${String(r[6] || '').trim()}`;
+    [aKey, bKey].forEach(k => {
+      if (!k.endsWith(':')) {
+        const cur = stats.get(k) || { wins: 0, total: 0 };
+        cur.total += 1;
+        stats.set(k, cur);
+      }
+    });
+    if (!wKey.endsWith(':')) {
+      const cur = stats.get(wKey) || { wins: 0, total: 0 };
+      cur.wins += 1;
+      stats.set(wKey, cur);
+    }
+  });
+  matchupStats = stats;
+}
+
+async function writeFullRankingToSheet() {
+  await ensureAccessTokenFresh();
+  const nowIso = new Date().toISOString();
+  const values = ranking.map((e, i) => [e.tmdbType || 'movie', String(e.tmdbId || ''), e.title || '', e.year || '', i + 1, nowIso]);
+  const data = [
+    { range: 'Rankings!A2:F', values }
+  ];
+  const wr = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+      body: JSON.stringify({ valueInputOption:'RAW', data }) }
+  );
+  await sheetsResponseOrThrow(wr, 'Save Rankings');
+}
+
+async function appendMatchupRow(row) {
+  await ensureAccessTokenFresh();
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Matchups!A:L')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ values:[row] }),
+  });
+  await sheetsResponseOrThrow(r, 'Append matchup');
+  matchupCount += 1;
+}
+
+async function initRankingIfEmpty() {
+  if (ranking.length) return;
+  const seen = moviesSeenFromLibrary();
+  // Stable initial order: title, then year.
+  seen.sort((a, b) => (a.title || '').localeCompare(b.title || '') || String(a.year || '').localeCompare(String(b.year || '')));
+  ranking = seen;
+  rebuildRankingIndex();
+  await writeFullRankingToSheet();
+}
+
+async function initRankSystem() {
+  if (_rankInited) return;
+  _rankInited = true;
+  try {
+    await ensureRankingTabs();
+    await loadRankingFromSheet();
+    await initRankingIfEmpty();
+    await countMatchupsFromSheet();
+    await loadMatchupStatsFromSheet();
+    updateRankTotalsUI();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function getRankPool() {
+  const limit = Number(rankPoolLimit || 0);
+  if (!limit || limit <= 0) return ranking.slice();
+  return ranking.slice(0, Math.min(limit, ranking.length));
+}
+
+function poolFilterLabel() {
+  const limit = Number(rankPoolLimit || 0);
+  return (!limit || limit <= 0) ? 'all' : `top${limit}`;
+}
+
+function randomInt(min, maxInclusive) {
+  const lo = Math.ceil(min);
+  const hi = Math.floor(maxInclusive);
+  if (hi < lo) return lo;
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+function pickMatchup() {
+  const pool = getRankPool();
+  if (pool.length < 2) return null;
+  const aIndex = randomInt(0, pool.length - 1);
+  const a = pool[aIndex];
+  const range = Math.max(1, Number(rankRange || 100));
+  const lo = Math.max(0, aIndex - range);
+  const hi = Math.min(pool.length - 1, aIndex + range);
+  const candidates = [];
+  for (let i = lo; i <= hi; i++) if (i !== aIndex) candidates.push(i);
+  if (!candidates.length) return null;
+  const bIndex = candidates[randomInt(0, candidates.length - 1)];
+  const b = pool[bIndex];
+  return { a, b, aIndexInPool: aIndex, bIndexInPool: bIndex, poolFilter: poolFilterLabel(), range };
+}
+
+function applyFlickchartBump({ winnerKey, loserKey }) {
+  const wIndex = rankingByKey.get(winnerKey);
+  const lIndex = rankingByKey.get(loserKey);
+  if (!Number.isFinite(wIndex) || !Number.isFinite(lIndex)) return { moved: false, delta: 0, from: null, to: null };
+  if (wIndex < lIndex) return { moved: false, delta: 0, from: wIndex, to: wIndex };
+  // Remove winner and insert one slot above loser (i.e., at loser index)
+  const [w] = ranking.splice(wIndex, 1);
+  ranking.splice(lIndex, 0, w);
+  rebuildRankingIndex();
+  const newIndex = rankingByKey.get(winnerKey);
+  return { moved: true, delta: (wIndex - newIndex), from: wIndex, to: newIndex };
+}
+
+function statsForKey(key) {
+  return matchupStats.get(key) || { wins: 0, total: 0 };
+}
+
+function bumpStatsForMatchup({ aKey, bKey, wKey }) {
+  [aKey, bKey].forEach(k => {
+    const cur = matchupStats.get(k) || { wins: 0, total: 0 };
+    cur.total += 1;
+    matchupStats.set(k, cur);
+  });
+  const w = matchupStats.get(wKey) || { wins: 0, total: 0 };
+  w.wins += 1;
+  matchupStats.set(wKey, w);
+}
+
+async function commitMatchup({ matchup, winner, loser }) {
+  const aKey = rankKeyOf(matchup.a);
+  const bKey = rankKeyOf(matchup.b);
+  const wKey = rankKeyOf(winner);
+  const lKey = rankKeyOf(loser);
+  const aBefore = rankingByKey.get(aKey);
+  const bBefore = rankingByKey.get(bKey);
+
+  const bump = applyFlickchartBump({ winnerKey: wKey, loserKey: lKey });
+  await writeFullRankingToSheet();
+
+  const wAfter = rankingByKey.get(wKey);
+  const ts = new Date().toISOString();
+  await appendMatchupRow([
+    ts,
+    matchup.a.tmdbType || 'movie', String(matchup.a.tmdbId || ''),
+    matchup.b.tmdbType || 'movie', String(matchup.b.tmdbId || ''),
+    winner.tmdbType || 'movie', String(winner.tmdbId || ''),
+    Number.isFinite(aBefore) ? aBefore + 1 : '',
+    Number.isFinite(bBefore) ? bBefore + 1 : '',
+    Number.isFinite(wAfter) ? wAfter + 1 : '',
+    matchup.range,
+    matchup.poolFilter
+  ]);
+
+  bumpStatsForMatchup({ aKey, bKey, wKey });
+
+  const s = statsForKey(wKey);
+  lastWinnerInfo = {
+    key: wKey,
+    title: winner.title || '',
+    year: winner.year || '',
+    moved: !!bump.moved,
+    movedBy: bump.moved ? bump.delta : 0,
+    rankAfter: Number.isFinite(wAfter) ? (wAfter + 1) : null,
+    wins: s.wins,
+    total: s.total,
+    winPct: s.total ? (s.wins / s.total) : 0,
+    ts
+  };
+
+  updateRankTotalsUI();
+  updateLastWinnerUI();
+}
+
+async function appendPlacementMatchupRow({ matchup, winner }) {
+  const aKey = rankKeyOf(matchup.a);
+  const bKey = rankKeyOf(matchup.b);
+  const wKey = rankKeyOf(winner);
+  const aBefore = rankingByKey.get(aKey);
+  const bBefore = rankingByKey.get(bKey);
+  const ts = new Date().toISOString();
+  await appendMatchupRow([
+    ts,
+    matchup.a.tmdbType || 'movie', String(matchup.a.tmdbId || ''),
+    matchup.b.tmdbType || 'movie', String(matchup.b.tmdbId || ''),
+    winner.tmdbType || 'movie', String(winner.tmdbId || ''),
+    Number.isFinite(aBefore) ? aBefore + 1 : '',
+    Number.isFinite(bBefore) ? bBefore + 1 : '',
+    '', // winner rank after (unknown until inserted)
+    matchup.range || '',
+    matchup.poolFilter || 'placement'
+  ]);
+  bumpStatsForMatchup({ aKey, bKey, wKey });
+}
+
+function startPlacementForEntry(entry) {
+  const pool = ranking.slice(); // full ranking (new entry not inserted yet)
+  placementState = {
+    entry,
+    low: 0,
+    high: Math.max(0, pool.length - 1),
+    comparisons: 0,
+    localRefines: 0
+  };
+  showView('rank');
+  beginPlacementMatchup();
+}
+
+function beginPlacementMatchup() {
+  if (!placementState) return;
+  const { entry, low, high } = placementState;
+  if (ranking.length < 1) {
+    ranking.unshift(entry);
+    rebuildRankingIndex();
+    placementState = null;
+    writeFullRankingToSheet().catch(e => console.error(e));
+    beginNextMatchup();
+    return;
+  }
+  if (low > high) {
+    const insertAt = Math.max(0, Math.min(low, ranking.length));
+    ranking.splice(insertAt, 0, entry);
+    rebuildRankingIndex();
+    placementState = null;
+    writeFullRankingToSheet().then(() => {
+      updateRankTotalsUI();
+      beginNextMatchup();
+    }).catch(e => console.error(e));
+    return;
+  }
+  const mid = Math.floor((low + high) / 2);
+  const opponent = ranking[mid];
+  currentMatchup = {
+    a: entry,
+    b: opponent,
+    aIndexInPool: null,
+    bIndexInPool: mid,
+    poolFilter: 'placement',
+    range: '',
+    isPlacement: true
+  };
+  renderMatchupUI();
+}
+
+async function commitPlacementChoice({ matchup, winner, loser }) {
+  if (!placementState) return;
+  await appendPlacementMatchupRow({ matchup, winner });
+  placementState.comparisons += 1;
+  const midIndex = rankingByKey.get(rankKeyOf(matchup.b));
+  if (!Number.isFinite(midIndex)) {
+    // Shouldn't happen, but keep moving
+    beginPlacementMatchup();
+    return;
+  }
+  const newWon = rankKeyOf(winner) === rankKeyOf(placementState.entry);
+  if (newWon) {
+    // New entry preferred: should be above opponent
+    placementState.high = midIndex - 1;
+  } else {
+    placementState.low = midIndex + 1;
+  }
+  beginPlacementMatchup();
+}
+
+function beginNextMatchup() {
+  const m = pickMatchup();
+  currentMatchup = m;
+  renderMatchupUI();
+}
+
+async function chooseSide(side) {
+  if (!currentMatchup) return;
+  const m = currentMatchup;
+  currentMatchup = null; // prevent double submits
+  try {
+    const winner = side === 'a' ? m.a : m.b;
+    const loser  = side === 'a' ? m.b : m.a;
+    if (m && m.isPlacement) {
+      await commitPlacementChoice({ matchup: m, winner, loser });
+    } else {
+      await commitMatchup({ matchup: m, winner, loser });
+    }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    if (!(m && m.isPlacement)) beginNextMatchup();
+  }
+}
+
+// ── Rank UI ───────────────────────────────────────────────────
+function ensureRankPageBuilt() {
+  const host = document.getElementById('rank-page');
+  if (!host) return;
+  const already = host.dataset.built === '1' && document.getElementById('rank-poster-a') && document.getElementById('rank-poster-b');
+  if (already) return;
+  host.dataset.built = '1';
+  host.innerHTML = `
+    <div class="rank-layout">
+      <div class="rank-panel">
+        <h3>Context</h3>
+        <div class="body">
+          <div class="rank-context" id="rank-context-a"></div>
+          <div style="height:12px"></div>
+          <div class="rank-context" id="rank-context-b"></div>
+        </div>
+      </div>
+
+      <div class="rank-panel" style="background:transparent;border:none">
+        <div class="rank-vs">
+          <div class="rank-vs-row">
+            <div class="rank-poster" id="rank-poster-a" role="button" tabindex="0" aria-label="Choose left movie"></div>
+            <div class="vs-chip">VS</div>
+            <div class="rank-poster" id="rank-poster-b" role="button" tabindex="0" aria-label="Choose right movie"></div>
+          </div>
+          <div class="rank-hint">Click a poster, or use ← / →. (Press N for next.)</div>
+        </div>
+      </div>
+
+      <div class="rank-panel">
+        <h3>Last winner</h3>
+        <div class="body">
+          <div class="rank-context" id="rank-last-winner"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const pa = document.getElementById('rank-poster-a');
+  const pb = document.getElementById('rank-poster-b');
+  if (pa) pa.addEventListener('click', () => chooseSide('a'));
+  if (pb) pb.addEventListener('click', () => chooseSide('b'));
+  if (pa) pa.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chooseSide('a'); } });
+  if (pb) pb.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chooseSide('b'); } });
+}
+
+function rankContextBlockFor(entry) {
+  const key = rankKeyOf(entry);
+  const idx = rankingByKey.get(key);
+  if (!Number.isFinite(idx)) return 'Not ranked yet.';
+  const start = Math.max(0, idx - 10);
+  const end = Math.min(ranking.length - 1, idx + 10);
+  let html = `<div><span class="rk">#${idx + 1}</span> <span class="me">${esc(entry.title || '')}</span> <span>(${esc(entry.year || '')})</span></div>`;
+  html += `<div style="margin-top:8px">`;
+  for (let i = start; i <= end; i++) {
+    const e = ranking[i];
+    const here = i === idx;
+    html += `<div${here ? ' style="margin:4px 0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:rgba(126,158,232,0.10)"' : ' style="margin:2px 0"'}>` +
+      `<span class="rk">#${i + 1}</span> ${esc(e.title || '')} <span style="opacity:.7">(${esc(e.year || '')})</span></div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function updateRankTotalsUI() {
+  const el = document.getElementById('rank-totals');
+  if (!el) return;
+  const pool = getRankPool();
+  el.textContent = `${pool.length.toLocaleString()} movies • ${matchupCount.toLocaleString()} matchups`;
+}
+
+function updateLastWinnerUI() {
+  const el = document.getElementById('rank-last-winner');
+  if (!el) return;
+  if (!lastWinnerInfo) {
+    el.innerHTML = `<div style="color:var(--muted)">No matchups yet.</div>`;
+    return;
+  }
+  const movedLine = lastWinnerInfo.moved
+    ? `Moved up <span class="rk">${lastWinnerInfo.movedBy}</span> spot(s) to <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`
+    : `Stayed at <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`;
+  el.innerHTML = `
+    <div><span class="me">${esc(lastWinnerInfo.title)}</span> <span style="opacity:.7">(${esc(lastWinnerInfo.year)})</span></div>
+    <div style="margin-top:8px">${movedLine}</div>
+    <div style="margin-top:8px">Win rate: <span class="rk">${(lastWinnerInfo.winPct * 100).toFixed(1)}%</span></div>
+    <div>Matchups: <span class="rk">${lastWinnerInfo.total}</span> • Wins: <span class="rk">${lastWinnerInfo.wins}</span></div>
+    <div style="margin-top:10px;color:var(--muted);font-size:11px">Last updated: ${esc(lastWinnerInfo.ts)}</div>
+  `;
+}
+
+function getPosterUrlForRankEntry(entry) {
+  const key = rankKeyOf(entry);
+  const cached = getRandomPosterFromCache(key);
+  if (cached) return cached;
+
+  // Fallback to the saved poster URL from your library sheet (fast).
+  const lib = allItems.find(i => i && i._type === 'movie' && String(i.tmdbId || '').trim() === String(entry.tmdbId || '').trim());
+  const fallback = (lib && lib.poster) ? lib.poster : '';
+
+  // Kick off background fetch so future renders can randomize.
+  ensureTmdbPosterCache(entry).catch(e => console.error('ensureTmdbPosterCache', e));
+  return fallback;
+}
+
+const _tmdbPosterCache = new Map(); // key => { paths:string[], at:number }
+
+function readPosterCacheFromStorage(key) {
+  try {
+    const raw = localStorage.getItem('mv_rank_posters_' + key);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    if (!j || !Array.isArray(j.paths)) return null;
+    return { paths: j.paths.filter(Boolean), at: Number(j.at || 0) };
+  } catch (e) { return null; }
+}
+
+function writePosterCacheToStorage(key, entry) {
+  try {
+    localStorage.setItem('mv_rank_posters_' + key, JSON.stringify(entry));
+  } catch (e) {}
+}
+
+function getRandomPosterFromCache(key) {
+  const inMem = _tmdbPosterCache.get(key) || readPosterCacheFromStorage(key);
+  if (!inMem || !inMem.paths || !inMem.paths.length) return '';
+  if (!_tmdbPosterCache.has(key)) _tmdbPosterCache.set(key, inMem);
+  const idx = randomInt(0, inMem.paths.length - 1);
+  const fp = inMem.paths[idx];
+  if (!fp) return '';
+  return `https://image.tmdb.org/t/p/w500${fp}`;
+}
+
+async function ensureTmdbPosterCache(entry) {
+  const key = rankKeyOf(entry);
+  const existing = _tmdbPosterCache.get(key) || readPosterCacheFromStorage(key);
+  // Refresh roughly monthly.
+  if (existing && existing.paths && existing.paths.length && (Date.now() - (existing.at || 0) < 30 * 24 * 3600 * 1000)) {
+    _tmdbPosterCache.set(key, existing);
+    return;
+  }
+  const kind = (entry.tmdbType || 'movie') === 'tv' ? 'tv' : 'movie';
+  const id = String(entry.tmdbId || '').trim();
+  if (!id) return;
+  const url = `https://api.themoviedb.org/3/${kind}/${id}/images?api_key=${TMDB_KEY}`;
+  const data = await fetch(url).then(r => r.json());
+  const posters = (data && data.posters) ? data.posters : [];
+  const paths = posters.map(p => p && p.file_path).filter(Boolean);
+  const rec = { paths, at: Date.now() };
+  _tmdbPosterCache.set(key, rec);
+  writePosterCacheToStorage(key, rec);
+}
+
+function renderPosterBox(targetId, entry) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  el.dataset.key = rankKeyOf(entry);
+  const url = getPosterUrlForRankEntry(entry);
+  const title = entry.title || '';
+  const year = entry.year || '';
+  if (!url) {
+    el.innerHTML = `<div class="no-poster"><div style="font-size:12px;color:var(--text)">${esc(title)}</div><div>${esc(year)}</div><div style="margin-top:8px">No poster</div></div>`;
+    return;
+  }
+  el.innerHTML = `<img src="${esc(url)}" alt="${esc(title)} poster"><div class="cap">${esc(title)}<small>${esc(year)}</small></div>`;
+
+  // If we have a cached set, reroll immediately for variety (without waiting next round).
+  Promise.resolve().then(async () => {
+    await ensureTmdbPosterCache(entry);
+    const stillSame = el.dataset.key === rankKeyOf(entry);
+    if (!stillSame) return;
+    const rerolled = getRandomPosterFromCache(rankKeyOf(entry));
+    if (rerolled && rerolled !== url) {
+      const img = el.querySelector('img');
+      if (img) img.src = rerolled;
+    }
+  }).catch(()=>{});
+}
+
+function renderMatchupUI() {
+  ensureRankPageBuilt();
+  const host = document.getElementById('rank-page');
+  if (!host || !host.classList.contains('vis')) return;
+  if (!currentMatchup) {
+    const pool = getRankPool();
+    host.innerHTML = `<div id="empty-state" style="display:flex"><p style="max-width:720px;text-align:center">Not enough movies in your ranking pool. Need at least 2.</p></div>`;
+    return;
+  }
+  // Ensure layout exists (avoid overwritten state if empty-state was shown)
+  ensureRankPageBuilt();
+  const m = currentMatchup;
+  renderPosterBox('rank-poster-a', m.a);
+  renderPosterBox('rank-poster-b', m.b);
+
+  const ca = document.getElementById('rank-context-a');
+  const cb = document.getElementById('rank-context-b');
+  if (ca) ca.innerHTML = rankContextBlockFor(m.a);
+  if (cb) cb.innerHTML = rankContextBlockFor(m.b);
+  updateLastWinnerUI();
+}
+
+function onRankPoolChanged() {
+  const sel = document.getElementById('rank-pool');
+  const v = sel ? Number(sel.value || 0) : 0;
+  rankPoolLimit = Number.isFinite(v) ? v : 0;
+  updateRankTotalsUI();
+  beginNextMatchup();
+}
+
+function onRankRangeChanged() {
+  const sel = document.getElementById('rank-range');
+  const v = sel ? Number(sel.value || 100) : 100;
+  rankRange = Number.isFinite(v) ? v : 100;
+  beginNextMatchup();
+}
+
+let _rankKeyHandlerInstalled = false;
+function onRankKeydown(e) {
+  if (e.key === 'ArrowLeft') { e.preventDefault(); chooseSide('a'); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); chooseSide('b'); }
+  else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); beginNextMatchup(); }
+}
+
+function installRankKeyboard() {
+  if (_rankKeyHandlerInstalled) return;
+  _rankKeyHandlerInstalled = true;
+  window.addEventListener('keydown', onRankKeydown);
+}
+
+function uninstallRankKeyboard() {
+  if (!_rankKeyHandlerInstalled) return;
+  _rankKeyHandlerInstalled = false;
+  window.removeEventListener('keydown', onRankKeydown);
+}
+
+// ── Ranked list page ──────────────────────────────────────────
+function renderRankedList() {
+  const host = document.getElementById('ranked-page');
+  if (!host || !host.classList.contains('vis')) return;
+
+  const pageSizeSel = document.getElementById('ranked-page-size');
+  const pageSel = document.getElementById('ranked-page-num');
+  const size = pageSizeSel ? Number(pageSizeSel.value || 250) : 250;
+  const pageSize = (!size || size <= 0) ? ranking.length : size;
+  const pages = Math.max(1, Math.ceil(ranking.length / pageSize));
+
+  if (pageSel && pageSel.options.length !== pages) {
+    pageSel.innerHTML = '';
+    for (let i = 1; i <= pages; i++) {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = String(i);
+      pageSel.appendChild(opt);
+    }
+  }
+  const pageNum = pageSel ? Math.max(1, Math.min(pages, Number(pageSel.value || 1))) : 1;
+  if (pageSel) pageSel.value = String(pageNum);
+
+  const start = (pageNum - 1) * pageSize;
+  const end = Math.min(ranking.length, start + pageSize);
+  const slice = ranking.slice(start, end);
+
+  const countEl = document.getElementById('ranked-count');
+  if (countEl) countEl.textContent = `${ranking.length.toLocaleString()} ranked`;
+
+  host.innerHTML = `<div class="ranked-grid" id="ranked-grid"></div>`;
+  const grid = document.getElementById('ranked-grid');
+  if (!grid) return;
+  slice.forEach((e, i) => {
+    const n = start + i + 1;
+    const div = document.createElement('div');
+    div.className = 'ranked-item';
+    div.innerHTML = `<div class="ranked-num">#${n}</div><div class="ranked-title">${esc(e.title || '')}<small>${esc(e.year || '')}</small></div>`;
+    grid.appendChild(div);
+  });
 }
 
 function ensureSheetId() {
@@ -871,6 +1580,62 @@ function sheetDateCellValue(v) {
     if (serial != null) return serial;
   }
   return cleanVal(v);
+}
+
+// ── Generic Sheets helpers (metadata + create tabs) ───────────
+let _sheetsMetaCache = null;
+let _sheetsMetaCacheAt = 0;
+
+async function fetchSheetsMeta({ force = false } = {}) {
+  await ensureAccessTokenFresh();
+  if (!force && _sheetsMetaCache && Date.now() - _sheetsMetaCacheAt < 15_000) return _sheetsMetaCache;
+  const fieldsParam = encodeURIComponent('sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))');
+  const metaR = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=${fieldsParam}`,
+    { headers:{ Authorization:'Bearer '+accessToken } }
+  );
+  await sheetsResponseOrThrow(metaR, 'Sheet metadata');
+  const meta = await metaR.json();
+  _sheetsMetaCache = meta;
+  _sheetsMetaCacheAt = Date.now();
+  return meta;
+}
+
+async function ensureTabExists({ title, headers, minCols = 8 }) {
+  const meta = await fetchSheetsMeta();
+  const existing = (meta.sheets || []).find(s => s?.properties?.title === title);
+  if (!existing) {
+    const addReq = {
+      addSheet: {
+        properties: {
+          title,
+          gridProperties: { rowCount: 2000, columnCount: Math.max(minCols, headers.length) }
+        }
+      }
+    };
+    const r = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
+      { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+        body: JSON.stringify({ requests:[addReq] }) }
+    );
+    await sheetsResponseOrThrow(r, `Create tab "${title}"`);
+    await fetchSheetsMeta({ force:true });
+  }
+
+  // Ensure header row exists
+  const values = await fetchSheet(title, `${title}!A1:${String.fromCharCode(64 + Math.min(26, Math.max(minCols, headers.length)))}1`);
+  const firstRow = (values && values[0]) ? values[0] : [];
+  const looksEmpty = firstRow.filter(Boolean).length === 0;
+  if (looksEmpty) {
+    await ensureAccessTokenFresh();
+    const data = [{ range:`${title}!A1`, values:[headers] }];
+    const wr = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
+      { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+        body: JSON.stringify({ valueInputOption:'RAW', data }) }
+    );
+    await sheetsResponseOrThrow(wr, `Write headers for "${title}"`);
+  }
 }
 
 // One row for "Watch Log": A=Date, B=Title, C=Year, D=Type, E=TMDB ID. TV title may be "Show: Season 3" (season in B, not a 6th column).
@@ -2170,6 +2935,19 @@ async function addPickedResult(r) {
     setAddStatus('Added! Refreshing…');
     await loadSheetData();
     closeAddModal();
+    try {
+      await initRankSystem();
+      if (r._type === 'movie') {
+        const entry = { tmdbType: 'movie', tmdbId: String(details.tmdbId || r.id || '').trim(), title: details.title || r.title || '', year: details.year || r.year || '' };
+        const key = rankKeyOf(entry);
+        if (entry.tmdbId && !rankingByKey.has(key)) {
+          // Guided placement matchups to insert new title into your ranking
+          startPlacementForEntry(entry);
+        }
+      }
+    } catch (e) {
+      console.error('startPlacementForEntry', e);
+    }
   } catch (e) {
     console.error(e);
     setAddStatus('Failed to add.');
@@ -2425,21 +3203,67 @@ function togglePopup(pop) {
 
 // ── View switching ───────────────────────────────────────────
 function showView(view) {
-  const gallery = view === 'gallery';
-  document.getElementById('nav-gallery').classList.toggle('active', gallery);
-  document.getElementById('nav-stats').classList.toggle('active', !gallery);
+  const isGallery = view === 'gallery';
+  const isRank    = view === 'rank';
+  const isRanked  = view === 'ranked';
+  const isStats   = view === 'stats';
+
+  const nav = (id, on) => { const el = document.getElementById(id); if (el) el.classList.toggle('active', !!on); };
+  nav('nav-gallery', isGallery);
+  nav('nav-rank', isRank);
+  nav('nav-ranked', isRanked);
+  nav('nav-stats', isStats);
+
   const chrome = document.getElementById('app-chrome');
-  if (chrome) chrome.classList.toggle('stats-view', !gallery);
+  if (chrome) chrome.classList.toggle('stats-view', isStats || isRank || isRanked);
+
+  const show = (id, disp, visClass = false) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (visClass) el.classList.toggle('vis', !!disp);
+    else el.style.display = disp ? '' : 'none';
+  };
+
+  // Toolbar chunks
+  const tg = document.getElementById('toolbar-gallery-chunk');
+  const tr = document.getElementById('toolbar-rank-chunk');
+  const tl = document.getElementById('toolbar-ranked-chunk');
+  if (tg) tg.style.display = isGallery ? 'flex' : 'none';
+  if (tr) tr.style.display = isRank ? 'flex' : 'none';
+  if (tl) tl.style.display = isRanked ? 'flex' : 'none';
+
+  // Filters only for gallery
   const fp = document.getElementById('filter-panel');
   const ft = document.getElementById('btn-filters-toggle');
-  if (!gallery && fp && ft) {
+  if (!isGallery && fp && ft) {
     fp.classList.remove('open');
     ft.setAttribute('aria-expanded', 'false');
   }
-  document.getElementById('grid').style.display = gallery ? 'grid' : 'none';
+  if (fp) fp.style.display = isGallery ? '' : 'none';
+
+  // Pages
+  const grid = document.getElementById('grid');
+  if (grid) grid.style.display = isGallery ? 'grid' : 'none';
+  show('rank-page', isRank, true);
+  show('ranked-page', isRanked, true);
+
   const sp = document.getElementById('stats-page');
-  if (!gallery) { sp.classList.add('vis'); renderStats(); }
-  else sp.classList.remove('vis');
+  if (sp) {
+    if (isStats) { sp.classList.add('vis'); renderStats(); }
+    else sp.classList.remove('vis');
+  }
+
+  if (isRank) {
+    updateRankTotalsUI();
+    if (!currentMatchup) beginNextMatchup();
+    installRankKeyboard();
+  } else {
+    uninstallRankKeyboard();
+  }
+
+  if (isRanked) {
+    renderRankedList();
+  }
 }
 
 function updateFilterActiveBadge() {
