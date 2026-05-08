@@ -652,7 +652,12 @@ let rankPoolLimit = 0; // 0 = all
 let rankRange = 100;
 let currentMatchup = null; // {a,b,poolKey,range}
 let _rankInited = false;
-let placementState = null; // { entry, low, high, comparisons, localRefines }
+let placementState = null; // { entryKey, remaining }
+
+// Elo ranking
+const ELO_DEFAULT = 1500;
+const ELO_K = 32;
+let eloByKey = new Map(); // key => number
 
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
@@ -830,6 +835,11 @@ async function ensureRankingTabs() {
     headers: ['timestamp', 'a_tmdbType', 'a_tmdbId', 'b_tmdbType', 'b_tmdbId', 'winner_tmdbType', 'winner_tmdbId', 'a_rank_before', 'b_rank_before', 'winner_rank_after', 'rangeUsed', 'poolFilter'],
     minCols: 14
   });
+  await ensureTabExists({
+    title: 'Elo',
+    headers: ['tmdbType', 'tmdbId', 'elo', 'updatedAt'],
+    minCols: 6
+  });
 }
 
 async function loadRankingFromSheet() {
@@ -849,6 +859,53 @@ async function loadRankingFromSheet() {
   if (hasIdx) entries.sort((a, b) => (a.rankIndex || 0) - (b.rankIndex || 0));
   ranking = entries.map(e => ({ tmdbType: e.tmdbType, tmdbId: e.tmdbId, title: e.title, year: e.year }));
   rebuildRankingIndex();
+}
+
+async function loadEloFromSheet() {
+  const rows = await fetchSheet('Elo', 'Elo!A2:D');
+  const m = new Map();
+  (rows || []).forEach(r => {
+    if (!r || !r[1]) return;
+    const key = `${String(r[0] || 'movie')}:${String(r[1] || '').trim()}`;
+    const elo = Number(r[2]);
+    if (!key.endsWith(':') && Number.isFinite(elo)) m.set(key, elo);
+  });
+  eloByKey = m;
+}
+
+function eloForKey(key) {
+  const v = eloByKey.get(key);
+  return Number.isFinite(v) ? v : ELO_DEFAULT;
+}
+
+function ensureEloForRanking() {
+  ranking.forEach(e => {
+    const k = rankKeyOf(e);
+    if (!eloByKey.has(k)) eloByKey.set(k, ELO_DEFAULT);
+  });
+}
+
+function sortRankingByElo() {
+  ranking.sort((a, b) => {
+    const ea = eloForKey(rankKeyOf(a));
+    const eb = eloForKey(rankKeyOf(b));
+    if (eb !== ea) return eb - ea;
+    return (a.title || '').localeCompare(b.title || '');
+  });
+  rebuildRankingIndex();
+}
+
+async function writeEloToSheet() {
+  await ensureAccessTokenFresh();
+  const nowIso = new Date().toISOString();
+  const values = ranking.map(e => [e.tmdbType || 'movie', String(e.tmdbId || ''), Math.round(eloForKey(rankKeyOf(e))), nowIso]);
+  const data = [{ range: 'Elo!A2:D', values }];
+  const wr = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+      body: JSON.stringify({ valueInputOption:'RAW', data }) }
+  );
+  await sheetsResponseOrThrow(wr, 'Save Elo');
 }
 
 async function countMatchupsFromSheet() {
@@ -925,6 +982,9 @@ async function initRankSystem() {
     await ensureRankingTabs();
     await loadRankingFromSheet();
     await initRankingIfEmpty();
+    await loadEloFromSheet();
+    ensureEloForRanking();
+    sortRankingByElo();
     await countMatchupsFromSheet();
     await loadMatchupStatsFromSheet();
     updateRankTotalsUI();
@@ -967,17 +1027,16 @@ function pickMatchup() {
   return { a, b, aIndexInPool: aIndex, bIndexInPool: bIndex, poolFilter: poolFilterLabel(), range };
 }
 
-function applyFlickchartBump({ winnerKey, loserKey }) {
-  const wIndex = rankingByKey.get(winnerKey);
-  const lIndex = rankingByKey.get(loserKey);
-  if (!Number.isFinite(wIndex) || !Number.isFinite(lIndex)) return { moved: false, delta: 0, from: null, to: null };
-  if (wIndex < lIndex) return { moved: false, delta: 0, from: wIndex, to: wIndex };
-  // Remove winner and insert one slot above loser (i.e., at loser index)
-  const [w] = ranking.splice(wIndex, 1);
-  ranking.splice(lIndex, 0, w);
-  rebuildRankingIndex();
-  const newIndex = rankingByKey.get(winnerKey);
-  return { moved: true, delta: (wIndex - newIndex), from: wIndex, to: newIndex };
+function applyEloResult({ winnerKey, loserKey }) {
+  const rw = eloForKey(winnerKey);
+  const rl = eloForKey(loserKey);
+  const expectedW = 1 / (1 + Math.pow(10, (rl - rw) / 400));
+  const expectedL = 1 - expectedW;
+  const newW = rw + ELO_K * (1 - expectedW);
+  const newL = rl + ELO_K * (0 - expectedL);
+  eloByKey.set(winnerKey, newW);
+  eloByKey.set(loserKey, newL);
+  return { winnerEloBefore: rw, winnerEloAfter: newW, loserEloBefore: rl, loserEloAfter: newL };
 }
 
 function statsForKey(key) {
@@ -1003,10 +1062,15 @@ async function commitMatchup({ matchup, winner, loser }) {
   const aBefore = rankingByKey.get(aKey);
   const bBefore = rankingByKey.get(bKey);
 
-  const bump = applyFlickchartBump({ winnerKey: wKey, loserKey: lKey });
-  await writeFullRankingToSheet();
-
+  const wRankBefore = rankingByKey.get(wKey);
+  const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
+  sortRankingByElo();
   const wAfter = rankingByKey.get(wKey);
+  const movedBy = (Number.isFinite(wRankBefore) && Number.isFinite(wAfter)) ? (wRankBefore - wAfter) : 0;
+
+  await writeFullRankingToSheet();
+  await writeEloToSheet();
+
   const ts = new Date().toISOString();
   await appendMatchupRow([
     ts,
@@ -1027,12 +1091,14 @@ async function commitMatchup({ matchup, winner, loser }) {
     key: wKey,
     title: winner.title || '',
     year: winner.year || '',
-    moved: !!bump.moved,
-    movedBy: bump.moved ? bump.delta : 0,
+    moved: movedBy > 0,
+    movedBy: movedBy > 0 ? movedBy : 0,
     rankAfter: Number.isFinite(wAfter) ? (wAfter + 1) : null,
     wins: s.wins,
     total: s.total,
     winPct: s.total ? (s.wins / s.total) : 0,
+    eloAfter: Math.round(eloForKey(wKey)),
+    eloChange: Math.round(eloDelta.winnerEloAfter - eloDelta.winnerEloBefore),
     ts
   };
 
@@ -1062,47 +1128,35 @@ async function appendPlacementMatchupRow({ matchup, winner }) {
 }
 
 function startPlacementForEntry(entry) {
-  const pool = ranking.slice(); // full ranking (new entry not inserted yet)
-  placementState = {
-    entry,
-    low: 0,
-    high: Math.max(0, pool.length - 1),
-    comparisons: 0,
-    localRefines: 0
-  };
+  const key = rankKeyOf(entry);
+  if (!rankingByKey.has(key)) {
+    ranking.push(entry);
+    eloByKey.set(key, ELO_DEFAULT);
+    sortRankingByElo();
+  }
+  placementState = { entryKey: key, remaining: 10 };
   showView('rank');
   beginPlacementMatchup();
 }
 
 function beginPlacementMatchup() {
   if (!placementState) return;
-  const { entry, low, high } = placementState;
-  if (ranking.length < 1) {
-    ranking.unshift(entry);
-    rebuildRankingIndex();
-    placementState = null;
-    writeFullRankingToSheet().catch(e => console.error(e));
-    beginNextMatchup();
-    return;
+  const entry = ranking.find(e => rankKeyOf(e) === placementState.entryKey);
+  if (!entry) { placementState = null; beginNextMatchup(); return; }
+  if (ranking.length < 2) { placementState = null; beginNextMatchup(); return; }
+
+  // Pick a random opponent (exclude the entry itself)
+  let opponent = null;
+  for (let tries = 0; tries < 10; tries++) {
+    const cand = ranking[randomInt(0, ranking.length - 1)];
+    if (cand && rankKeyOf(cand) !== placementState.entryKey) { opponent = cand; break; }
   }
-  if (low > high) {
-    const insertAt = Math.max(0, Math.min(low, ranking.length));
-    ranking.splice(insertAt, 0, entry);
-    rebuildRankingIndex();
-    placementState = null;
-    writeFullRankingToSheet().then(() => {
-      updateRankTotalsUI();
-      beginNextMatchup();
-    }).catch(e => console.error(e));
-    return;
-  }
-  const mid = Math.floor((low + high) / 2);
-  const opponent = ranking[mid];
+  if (!opponent) { placementState = null; beginNextMatchup(); return; }
   currentMatchup = {
     a: entry,
     b: opponent,
     aIndexInPool: null,
-    bIndexInPool: mid,
+    bIndexInPool: null,
     poolFilter: 'placement',
     range: '',
     isPlacement: true
@@ -1112,34 +1166,13 @@ function beginPlacementMatchup() {
 
 async function commitPlacementChoice({ matchup, winner, loser }) {
   if (!placementState) return;
-  await appendPlacementMatchupRow({ matchup, winner });
-  placementState.comparisons += 1;
-  const midIndex = rankingByKey.get(rankKeyOf(matchup.b));
-  if (!Number.isFinite(midIndex)) {
-    // Shouldn't happen, but keep moving
-    beginPlacementMatchup();
-    return;
-  }
-  const newWon = rankKeyOf(winner) === rankKeyOf(placementState.entry);
-  if (newWon) {
-    // New entry preferred: should be above opponent
-    placementState.high = midIndex - 1;
-  } else {
-    placementState.low = midIndex + 1;
-  }
-
-  // If you asked for a fixed number of placement matchups, stop there and insert.
-  if (Number.isFinite(placementState.targetComparisons) && placementState.comparisons >= placementState.targetComparisons) {
-    const insertAt = Math.max(0, Math.min(placementState.low, ranking.length));
-    ranking.splice(insertAt, 0, placementState.entry);
-    rebuildRankingIndex();
+  await commitMatchup({ matchup, winner, loser });
+  placementState.remaining -= 1;
+  if (placementState.remaining <= 0) {
     placementState = null;
-    await writeFullRankingToSheet();
-    updateRankTotalsUI();
     beginNextMatchup();
     return;
   }
-
   beginPlacementMatchup();
 }
 
@@ -1220,12 +1253,13 @@ function rankContextBlockFor(entry) {
   if (!Number.isFinite(idx)) return 'Not ranked yet.';
   const start = Math.max(0, idx - 5);
   const end = Math.min(ranking.length - 1, idx + 5);
-  let html = `<div style="margin-bottom:8px"><span class="rk">#${idx + 1}</span> ${esc(entry.title || '')} <span style="opacity:.7">(${esc(entry.year || '')})</span></div>`;
-  html += `<div>`;
+  let html = `<div>`;
   if (start > 0) html += `<div style="margin:2px 0;color:var(--muted)">…</div>`;
   for (let i = start; i <= end; i++) {
     const e = ranking[i];
-    html += `<div style="margin:2px 0"><span class="rk">#${i + 1}</span> ${esc(e.title || '')} <span style="opacity:.7">(${esc(e.year || '')})</span></div>`;
+    const isFocus = i === idx;
+    html += `<div style="margin:2px 0;${isFocus ? 'padding:6px 8px;border-radius:8px;background:rgba(126,158,232,0.16);border:1px solid rgba(126,158,232,0.35);font-size:13px;font-weight:600;' : ''}">` +
+      `<span class="rk">#${i + 1}</span> ${esc(e.title || '')} <span style="opacity:.7;font-weight:500">(${esc(e.year || '')})</span></div>`;
   }
   if (end < ranking.length - 1) html += `<div style="margin:2px 0;color:var(--muted)">…</div>`;
   html += `</div>`;
@@ -1252,6 +1286,7 @@ function updateLastWinnerUI() {
   el.innerHTML = `
     <div><span class="me">${esc(lastWinnerInfo.title)}</span> <span style="opacity:.7">(${esc(lastWinnerInfo.year)})</span></div>
     <div style="margin-top:8px">${movedLine}</div>
+    ${Number.isFinite(lastWinnerInfo.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${lastWinnerInfo.eloAfter}</span> ${Number.isFinite(lastWinnerInfo.eloChange) ? `<span style="color:var(--muted)">(${lastWinnerInfo.eloChange >= 0 ? '+' : ''}${lastWinnerInfo.eloChange})</span>` : ''}</div>` : ''}
     <div style="margin-top:8px">Win rate: <span class="rk">${(lastWinnerInfo.winPct * 100).toFixed(1)}%</span></div>
     <div>Matchups: <span class="rk">${lastWinnerInfo.total}</span> • Wins: <span class="rk">${lastWinnerInfo.wins}</span></div>
     <div style="margin-top:10px;color:var(--muted);font-size:11px">Last updated: ${esc(lastWinnerInfo.ts)}</div>
@@ -1338,18 +1373,6 @@ function renderPosterBox(targetId, entry) {
     return;
   }
   el.innerHTML = `<img src="${esc(url)}" alt="${esc(title)} poster"><div class="cap">${esc(title)}<small>${esc(year)}</small></div>`;
-
-  // If we have a cached set, reroll immediately for variety (without waiting next round).
-  Promise.resolve().then(async () => {
-    await ensureTmdbPosterCache(entry);
-    const stillSame = el.dataset.key === rankKeyOf(entry);
-    if (!stillSame) return;
-    const rerolled = getRandomPosterFromCache(rankKeyOf(entry));
-    if (rerolled && rerolled !== url) {
-      const img = el.querySelector('img');
-      if (img) img.src = rerolled;
-    }
-  }).catch(()=>{});
 }
 
 function prefetchRankPostersForMatchup(m) {
@@ -2378,8 +2401,6 @@ async function confirmWatch() {
         const key = rankKeyOf(entry);
         if (entry.tmdbId && !rankingByKey.has(key)) {
           startPlacementForEntry(entry);
-          // Force “10 placement matchups” by capping comparisons
-          if (placementState) placementState.targetComparisons = 10;
         }
       } catch (e) {
         console.error('watched->placement', e);
