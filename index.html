@@ -658,6 +658,7 @@ let placementState = null; // { entryKey, remaining }
 const ELO_DEFAULT = 1500;
 const ELO_K = 32;
 let eloByKey = new Map(); // key => number
+let excludedKeys = new Set(); // key => excluded from ranking/matchups
 
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
@@ -840,6 +841,11 @@ async function ensureRankingTabs() {
     headers: ['tmdbType', 'tmdbId', 'elo', 'updatedAt'],
     minCols: 6
   });
+  await ensureTabExists({
+    title: 'Excluded',
+    headers: ['timestamp', 'tmdbType', 'tmdbId', 'title', 'year', 'reason'],
+    minCols: 10
+  });
 }
 
 async function loadRankingFromSheet() {
@@ -873,6 +879,24 @@ async function loadEloFromSheet() {
   eloByKey = m;
 }
 
+async function loadExcludedFromSheet() {
+  const rows = await fetchSheet('Excluded', 'Excluded!A2:F');
+  // Treat this sheet as an action log. If a key appears later with action "include",
+  // it is considered re-added even if it was previously excluded.
+  const state = new Map(); // key => boolean (true = excluded)
+  (rows || []).forEach(r => {
+    if (!r || !r[2]) return;
+    const key = `${String(r[1] || 'movie')}:${String(r[2] || '').trim()}`;
+    if (key.endsWith(':')) return;
+    const actionRaw = String(r[5] || '').trim().toLowerCase();
+    const action = actionRaw.includes('include') || actionRaw.includes('readd') ? 'include' : 'exclude';
+    state.set(key, action === 'exclude');
+  });
+  const s = new Set();
+  for (const [k, isExcluded] of state.entries()) if (isExcluded) s.add(k);
+  excludedKeys = s;
+}
+
 function eloForKey(key) {
   const v = eloByKey.get(key);
   return Number.isFinite(v) ? v : ELO_DEFAULT;
@@ -883,6 +907,12 @@ function ensureEloForRanking() {
     const k = rankKeyOf(e);
     if (!eloByKey.has(k)) eloByKey.set(k, ELO_DEFAULT);
   });
+}
+
+function pruneExcludedFromRanking() {
+  if (!excludedKeys || !excludedKeys.size) return;
+  ranking = ranking.filter(e => !excludedKeys.has(rankKeyOf(e)));
+  rebuildRankingIndex();
 }
 
 function sortRankingByElo() {
@@ -965,6 +995,59 @@ async function appendMatchupRow(row) {
   matchupCount += 1;
 }
 
+async function appendExcludedRow({ entry, reason }) {
+  await ensureAccessTokenFresh();
+  const ts = new Date().toISOString();
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Excluded!A:F')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+    body: JSON.stringify({ values:[[ts, entry.tmdbType || 'movie', String(entry.tmdbId || ''), entry.title || '', entry.year || '', reason || '']] }),
+  });
+  await sheetsResponseOrThrow(r, 'Append excluded');
+}
+
+async function excludeEntry(entry, reason) {
+  const key = rankKeyOf(entry);
+  if (!entry || !entry.tmdbId || key.endsWith(':')) return;
+  excludedKeys.add(key);
+  // Remove from ranking and Elo
+  ranking = ranking.filter(e => rankKeyOf(e) !== key);
+  eloByKey.delete(key);
+  rebuildRankingIndex();
+  await appendExcludedRow({ entry, reason });
+  await writeFullRankingToSheet();
+  await writeEloToSheet();
+  updateRankTotalsUI();
+}
+
+async function includeEntry(entry, reason) {
+  const key = rankKeyOf(entry);
+  if (!entry || !entry.tmdbId || key.endsWith(':')) return;
+  excludedKeys.delete(key);
+  if (!rankingByKey.has(key)) {
+    ranking.push(entry);
+    eloByKey.set(key, eloForKey(key));
+    sortRankingByElo();
+  }
+  await appendExcludedRow({ entry, reason: reason || 'include' });
+  await writeFullRankingToSheet();
+  await writeEloToSheet();
+  updateRankTotalsUI();
+}
+
+async function excludeCurrent(side) {
+  if (!currentMatchup) return;
+  const entry = side === 'a' ? currentMatchup.a : currentMatchup.b;
+  try {
+    await excludeEntry(entry, 'user_removed');
+  } catch (e) {
+    console.error('excludeEntry', e);
+  } finally {
+    beginNextMatchup();
+  }
+}
+
 async function initRankingIfEmpty() {
   if (ranking.length) return;
   const seen = moviesSeenFromLibrary();
@@ -982,8 +1065,10 @@ async function initRankSystem() {
     await ensureRankingTabs();
     await loadRankingFromSheet();
     await initRankingIfEmpty();
+    await loadExcludedFromSheet();
     await loadEloFromSheet();
     ensureEloForRanking();
+    pruneExcludedFromRanking();
     sortRankingByElo();
     await countMatchupsFromSheet();
     await loadMatchupStatsFromSheet();
@@ -995,8 +1080,9 @@ async function initRankSystem() {
 
 function getRankPool() {
   const limit = Number(rankPoolLimit || 0);
-  if (!limit || limit <= 0) return ranking.slice();
-  return ranking.slice(0, Math.min(limit, ranking.length));
+  const filtered = ranking.filter(e => !excludedKeys.has(rankKeyOf(e)));
+  if (!limit || limit <= 0) return filtered.slice();
+  return filtered.slice(0, Math.min(limit, filtered.length));
 }
 
 function poolFilterLabel() {
@@ -1129,6 +1215,7 @@ async function appendPlacementMatchupRow({ matchup, winner }) {
 
 function startPlacementForEntry(entry) {
   const key = rankKeyOf(entry);
+  if (excludedKeys.has(key)) return;
   if (!rankingByKey.has(key)) {
     ranking.push(entry);
     eloByKey.set(key, ELO_DEFAULT);
@@ -1222,9 +1309,19 @@ function ensureRankPageBuilt() {
       <div class="rank-panel" style="background:transparent;border:none">
         <div class="rank-vs">
           <div class="rank-vs-row">
-            <div class="rank-poster" id="rank-poster-a" role="button" tabindex="0" aria-label="Choose left movie"></div>
+            <div>
+              <div class="rank-poster" id="rank-poster-a" role="button" tabindex="0" aria-label="Choose left movie"></div>
+              <div style="margin-top:10px;display:flex;gap:8px;justify-content:center">
+                <button type="button" class="modal-btn btn-cancel" style="max-width:180px" onclick="excludeCurrent('a')">Remove A</button>
+              </div>
+            </div>
             <div class="vs-chip">VS</div>
-            <div class="rank-poster" id="rank-poster-b" role="button" tabindex="0" aria-label="Choose right movie"></div>
+            <div>
+              <div class="rank-poster" id="rank-poster-b" role="button" tabindex="0" aria-label="Choose right movie"></div>
+              <div style="margin-top:10px;display:flex;gap:8px;justify-content:center">
+                <button type="button" class="modal-btn btn-cancel" style="max-width:180px" onclick="excludeCurrent('b')">Remove B</button>
+              </div>
+            </div>
           </div>
           <div class="rank-hint">Click a poster, or use ← / →. (Press N for next.)</div>
         </div>
@@ -2392,6 +2489,19 @@ async function confirmWatch() {
     btn.title = 'Log another watch';
     document.getElementById('date-modal').classList.remove('vis');
     pendingWatch = null;
+
+    // If this title was excluded, offer to re-add it when you watch it again.
+    if (item.tmdbId) {
+      const entry = { tmdbType: 'movie', tmdbId: String(item.tmdbId || '').trim(), title: item.title || '', year: item.year || '' };
+      const key = rankKeyOf(entry);
+      if (excludedKeys.has(key)) {
+        const ok = window.confirm(`"${entry.title}" is currently excluded from your rankings.\n\nRe-add it to rankings and future matchups?`);
+        if (ok) {
+          await initRankSystem();
+          await includeEntry(entry, 'include_via_watch');
+        }
+      }
+    }
 
     // If this was newly marked watched, trigger a 10-match placement flow.
     if (!wasWatched && item.tmdbId) {
