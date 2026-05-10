@@ -926,26 +926,68 @@ async function setRankMeta(key, value) {
   await sheetsResponseOrThrow(wr, 'Update RankMeta');
 }
 
-async function loadRankStats() {
-  const rows = await fetchSheet('RankStats', 'RankStats!A2:E');
-  const stats = new Map();
+/** Split RankStats / rank keys (type may include no ":"; TMDB IDs are numeric in Sheets). */
+function splitRankRowKeyParts(key) {
+  const i = String(key || '').indexOf(':');
+  if (i <= 0) return { tmdbType: 'movie', tmdbId: '' };
+  return {
+    tmdbType: key.slice(0, i),
+    tmdbId: key.slice(i + 1),
+  };
+}
+
+/** Only row indexes for flushing — wins/total always rebuilt from Matchups for accuracy */
+async function loadRankStatsRowMap() {
+  const rows = await fetchSheet('RankStats', 'RankStats!A2:B');
   const rowBy = new Map();
   (rows || []).forEach((r, idx) => {
-    if (!r || !r[1]) return;
-    const key = `${String(r[0] || 'movie')}:${String(r[1] || '').trim()}`;
-    if (key.endsWith(':')) return;
-    const wins = Number(r[2] || 0);
-    const total = Number(r[3] || 0);
-    stats.set(key, { wins: Number.isFinite(wins) ? wins : 0, total: Number.isFinite(total) ? total : 0 });
+    if (!r || r[1] === undefined || r[1] === null) return;
+    const idRaw = typeof r[1] === 'number' ? String(r[1]) : String(r[1] ?? '').trim();
+    if (!idRaw) return;
+    const key = `${String(r[0] || 'movie')}:${idRaw}`;
     rowBy.set(key, idx + 2);
   });
-  matchupStats = stats;
   _rankStatsRowByKey = rowBy;
+}
+
+/** Source of truth: count participations / wins from every non-undone Matchups row */
+async function rebuildMatchupStatsFromMatchupsSheet() {
+  const undone = await loadUndoneMatchupTimestamps();
+  const rows = await fetchSheet('Matchups', 'Matchups!A2:G');
+  const stats = new Map();
+  (rows || []).forEach(r => {
+    if (!r || r[0] === undefined || r[0] === null) return;
+    const ts = String(r[0] ?? '').trim();
+    if (!ts || undone.has(ts)) return;
+
+    const aType = String(r[1] ?? 'movie').trim() || 'movie';
+    const aIdRaw = typeof r[2] === 'number' ? String(r[2]) : String(r[2] ?? '').trim();
+    const bType = String(r[3] ?? 'movie').trim() || 'movie';
+    const bIdRaw = typeof r[4] === 'number' ? String(r[4]) : String(r[4] ?? '').trim();
+    const wType = String(r[5] ?? 'movie').trim() || 'movie';
+    const wIdRaw = typeof r[6] === 'number' ? String(r[6]) : String(r[6] ?? '').trim();
+
+    if (!aIdRaw || !bIdRaw || !wIdRaw) return;
+
+    const aKey = `${aType}:${aIdRaw}`;
+    const bKey = `${bType}:${bIdRaw}`;
+    const wKey = `${wType}:${wIdRaw}`;
+
+    [aKey, bKey].forEach(k => {
+      const cur = stats.get(k) || { wins: 0, total: 0 };
+      cur.total += 1;
+      stats.set(k, cur);
+    });
+    const w = stats.get(wKey) || { wins: 0, total: 0 };
+    w.wins += 1;
+    stats.set(wKey, w);
+  });
+  matchupStats = stats;
 }
 
 async function upsertRankStatsRow(key) {
   if (_rankStatsRowByKey.has(key)) return _rankStatsRowByKey.get(key);
-  const [tmdbType, tmdbId] = key.split(':');
+  const { tmdbType, tmdbId } = splitRankRowKeyParts(key);
   const nowIso = new Date().toISOString();
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('RankStats!A:E')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
   const s = statsForKey(key);
@@ -968,7 +1010,8 @@ async function flushRankStats(keys) {
     if (!rowNum) rowNum = await upsertRankStatsRow(key);
     if (!rowNum) continue;
     const s = statsForKey(key);
-    data.push({ range:`RankStats!A${rowNum}:E${rowNum}`, values:[[key.split(':')[0] || 'movie', key.split(':')[1] || '', s.wins || 0, s.total || 0, nowIso]] });
+    const { tmdbType: tt, tmdbId: ti } = splitRankRowKeyParts(key);
+    data.push({ range:`RankStats!A${rowNum}:E${rowNum}`, values:[[tt || 'movie', ti || '', s.wins || 0, s.total || 0, nowIso]] });
   }
   if (!data.length) return;
   const wr = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`, {
@@ -1126,34 +1169,6 @@ async function countMatchupsFromSheet() {
     .filter(ts => ts && !undone.has(ts)).length;
 }
 
-async function loadMatchupStatsFromSheet() {
-  // A..G includes winner key columns
-  const undone = await loadUndoneMatchupTimestamps();
-  const rows = await fetchSheet('Matchups', 'Matchups!A2:G');
-  const stats = new Map();
-  (rows || []).forEach(r => {
-    if (!r || !r[0]) return;
-    const ts = String(r[0] || '').trim();
-    if (ts && undone.has(ts)) return;
-    const aKey = `${String(r[1] || 'movie')}:${String(r[2] || '').trim()}`;
-    const bKey = `${String(r[3] || 'movie')}:${String(r[4] || '').trim()}`;
-    const wKey = `${String(r[5] || 'movie')}:${String(r[6] || '').trim()}`;
-    [aKey, bKey].forEach(k => {
-      if (!k.endsWith(':')) {
-        const cur = stats.get(k) || { wins: 0, total: 0 };
-        cur.total += 1;
-        stats.set(k, cur);
-      }
-    });
-    if (!wKey.endsWith(':')) {
-      const cur = stats.get(wKey) || { wins: 0, total: 0 };
-      cur.wins += 1;
-      stats.set(wKey, cur);
-    }
-  });
-  matchupStats = stats;
-}
-
 async function writeFullRankingToSheet() {
   await ensureAccessTokenFresh();
   const nowIso = new Date().toISOString();
@@ -1301,7 +1316,8 @@ async function initRankSystem() {
     // True count from Matchups (RankMeta can be stale); then sync meta
     await countMatchupsFromSheet();
     await setRankMeta('matchupCount', matchupCount);
-    await loadRankStats();
+    await loadRankStatsRowMap();
+    await rebuildMatchupStatsFromMatchupsSheet();
     await loadEloFromSheet();
     ensureEloForRanking();
     pruneExcludedFromRanking();
@@ -1393,6 +1409,7 @@ async function commitMatchup({ matchup, winner, loser }) {
       [aKey, { ...(matchupStats.get(aKey) || { wins: 0, total: 0 }) }],
       [bKey, { ...(matchupStats.get(bKey) || { wins: 0, total: 0 }) }],
       [wKey, { ...(matchupStats.get(wKey) || { wins: 0, total: 0 }) }],
+      [lKey, { ...(matchupStats.get(lKey) || { wins: 0, total: 0 }) }],
     ]),
     matchupCountBefore: matchupCount,
     lastWinnerBefore: lastWinnerInfo ? { ...lastWinnerInfo } : null,
@@ -1428,7 +1445,7 @@ async function commitMatchup({ matchup, winner, loser }) {
   matchupCount += 1;
   await setRankMeta('matchupCount', matchupCount);
   await flushElo([wKey, lKey]);
-  await flushRankStats([aKey, bKey, wKey]);
+  await flushRankStats([...new Set([aKey, bKey, wKey, lKey])]);
 
   const s = statsForKey(wKey);
   const ls = statsForKey(lKey);
@@ -1722,7 +1739,7 @@ function updateLastWinnerUI() {
       ${loserMovedLine ? `<div style="margin-top:8px">${loserMovedLine}</div>` : ''}
       ${Number.isFinite(loser.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${loser.eloAfter}</span> ${Number.isFinite(loser.eloChange) ? `<span style="color:var(--muted)">(${loser.eloChange >= 0 ? '+' : ''}${loser.eloChange})</span>` : ''}</div>` : ''}
       <div style="margin-top:8px">Win rate: <span class="rk">${(loser.winPct * 100).toFixed(1)}%</span></div>
-      <div>Matchups: <span class="rk">${loser.total}</span> • Wins: <span class="rk">${loser.wins}</span></div>
+      <div>Matchups: <span class="rk">${loser.total}</span> • Wins: <span class="rk">${loser.wins}</span> • Losses: <span class="rk">${Math.max(0, loser.total - loser.wins)}</span></div>
     </div>
   ` : '';
 
@@ -1732,7 +1749,7 @@ function updateLastWinnerUI() {
     <div style="margin-top:8px">${movedLine}</div>
     ${Number.isFinite(lastWinnerInfo.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${lastWinnerInfo.eloAfter}</span> ${Number.isFinite(lastWinnerInfo.eloChange) ? `<span style="color:var(--muted)">(${lastWinnerInfo.eloChange >= 0 ? '+' : ''}${lastWinnerInfo.eloChange})</span>` : ''}</div>` : ''}
     <div style="margin-top:8px">Win rate: <span class="rk">${(lastWinnerInfo.winPct * 100).toFixed(1)}%</span></div>
-    <div>Matchups: <span class="rk">${lastWinnerInfo.total}</span> • Wins: <span class="rk">${lastWinnerInfo.wins}</span></div>
+    <div>Matchups: <span class="rk">${lastWinnerInfo.total}</span> • Wins: <span class="rk">${lastWinnerInfo.wins}</span> • Losses: <span class="rk">${Math.max(0, lastWinnerInfo.total - lastWinnerInfo.wins)}</span></div>
     ${loserBlock}
     <div style="margin-top:10px;color:var(--muted);font-size:11px">Last updated: ${esc(lastWinnerInfo.ts)}</div>
   `;
