@@ -843,8 +843,15 @@ async function loadSheetData() {
 }
 
 // ── Rankings + Matchups sheets ────────────────────────────────
+/** TMDB id as stored in Sheets (may be number or string). */
+function cellToTmdbId(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number' && Number.isFinite(v)) return String(Math.trunc(v));
+  return String(v).trim();
+}
+
 function rankKeyOf(entry) {
-  return `${entry.tmdbType || 'movie'}:${String(entry.tmdbId || '').trim()}`;
+  return `${entry.tmdbType || 'movie'}:${cellToTmdbId(entry?.tmdbId)}`;
 }
 
 function rebuildRankingIndex() {
@@ -860,7 +867,7 @@ function dedupeRankingByKey() {
     const k = rankKeyOf(e);
     if (!k || k === 'movie:' || k.endsWith(':')) continue;
     if (!merged.has(k)) {
-      merged.set(k, { tmdbType: e.tmdbType || 'movie', tmdbId: String(e.tmdbId || '').trim(), title: e.title || '', year: e.year || '' });
+      merged.set(k, { tmdbType: e.tmdbType || 'movie', tmdbId: cellToTmdbId(e.tmdbId), title: e.title || '', year: e.year || '' });
       order.push(k);
     } else {
       const cur = merged.get(k);
@@ -878,7 +885,7 @@ function moviesSeenFromLibrary() {
     .filter(i => i && i._type === 'movie' && String(i.watched || '').toLowerCase() === 'yes' && String(i.tmdbId || '').trim())
     .map(i => ({
       tmdbType: 'movie',
-      tmdbId: String(i.tmdbId).trim(),
+      tmdbId: cellToTmdbId(i.tmdbId),
       title: i.title || '',
       year: i.year || ''
     }));
@@ -962,7 +969,7 @@ async function loadRankStatsRowMap() {
   const rowBy = new Map();
   (rows || []).forEach((r, idx) => {
     if (!r || r[1] === undefined || r[1] === null) return;
-    const idRaw = typeof r[1] === 'number' ? String(r[1]) : String(r[1] ?? '').trim();
+    const idRaw = cellToTmdbId(r[1]);
     if (!idRaw) return;
     const key = `${String(r[0] || 'movie')}:${idRaw}`;
     rowBy.set(key, idx + 2);
@@ -981,11 +988,11 @@ async function rebuildMatchupStatsFromMatchupsSheet() {
     if (!ts || undone.has(ts)) return;
 
     const aType = String(r[1] ?? 'movie').trim() || 'movie';
-    const aIdRaw = typeof r[2] === 'number' ? String(r[2]) : String(r[2] ?? '').trim();
+    const aIdRaw = cellToTmdbId(r[2]);
     const bType = String(r[3] ?? 'movie').trim() || 'movie';
-    const bIdRaw = typeof r[4] === 'number' ? String(r[4]) : String(r[4] ?? '').trim();
+    const bIdRaw = cellToTmdbId(r[4]);
     const wType = String(r[5] ?? 'movie').trim() || 'movie';
-    const wIdRaw = typeof r[6] === 'number' ? String(r[6]) : String(r[6] ?? '').trim();
+    const wIdRaw = cellToTmdbId(r[6]);
 
     if (!aIdRaw || !bIdRaw || !wIdRaw) return;
 
@@ -1054,25 +1061,25 @@ async function loadUndoneMatchupTimestamps() {
 async function loadRankingFromSheet() {
   const rows = await fetchSheet('Rankings', 'Rankings!A2:F');
   const entries = (rows || [])
-    .filter(r => r && r[1])
+    .filter(r => r && (r[1] !== '' && r[1] !== null && r[1] !== undefined))
     .map(r => ({
       tmdbType: String(r[0] || 'movie'),
-      tmdbId: String(r[1] || '').trim(),
+      tmdbId: cellToTmdbId(r[1]),
       title: String(r[2] || ''),
       year: String(r[3] || ''),
       rankIndex: Number(r[4] || 0),
       updatedAt: String(r[5] || '')
-    }));
+    }))
+    .filter(e => e.tmdbId);
   // Prefer explicit rankIndex if present; otherwise keep sheet order.
   const hasIdx = entries.some(e => Number.isFinite(e.rankIndex) && e.rankIndex > 0);
   if (hasIdx) entries.sort((a, b) => (a.rankIndex || 0) - (b.rankIndex || 0));
   ranking = entries.map(e => ({ tmdbType: e.tmdbType, tmdbId: e.tmdbId, title: e.title, year: e.year }));
-  const nBefore = ranking.length;
   dedupeRankingByKey();
-  if (ranking.length < nBefore) {
-    await writeFullRankingToSheet();
-    _rankingDirty = false;
-  }
+  // Always persist after load: (1) merge duplicate keys in memory, (2) clear stale rows BELOW the
+  // written block — Sheets does not delete trailing rows when you write fewer rows than before.
+  await writeFullRankingToSheet();
+  _rankingDirty = false;
 }
 
 async function loadEloFromSheet() {
@@ -1080,14 +1087,14 @@ async function loadEloFromSheet() {
   const m = new Map();
   const rowBy = new Map();
   (rows || []).forEach(r => {
-    if (!r || !r[1]) return;
-    const key = `${String(r[0] || 'movie')}:${String(r[1] || '').trim()}`;
+    if (!r || r[1] === '' || r[1] === null || r[1] === undefined) return;
+    const key = `${String(r[0] || 'movie')}:${cellToTmdbId(r[1])}`;
     const elo = Number(r[2]);
     if (!key.endsWith(':') && Number.isFinite(elo)) m.set(key, elo);
   });
   (rows || []).forEach((r, idx) => {
-    if (!r || !r[1]) return;
-    const key = `${String(r[0] || 'movie')}:${String(r[1] || '').trim()}`;
+    if (!r || r[1] === '' || r[1] === null || r[1] === undefined) return;
+    const key = `${String(r[0] || 'movie')}:${cellToTmdbId(r[1])}`;
     if (!key.endsWith(':')) rowBy.set(key, idx + 2);
   });
   eloByKey = m;
@@ -1101,7 +1108,7 @@ async function loadExcludedFromSheet() {
   const state = new Map(); // key => boolean (true = excluded)
   (rows || []).forEach(r => {
     if (!r || !r[2]) return;
-    const key = `${String(r[1] || 'movie')}:${String(r[2] || '').trim()}`;
+    const key = `${String(r[1] || 'movie')}:${cellToTmdbId(r[2])}`;
     if (key.endsWith(':')) return;
     const actionRaw = String(r[5] || '').trim().toLowerCase();
     const action = actionRaw.includes('include') || actionRaw.includes('readd') ? 'include' : 'exclude';
@@ -1143,7 +1150,15 @@ function sortRankingByElo() {
 async function writeEloToSheet() {
   await ensureAccessTokenFresh();
   const nowIso = new Date().toISOString();
-  const values = ranking.map(e => [e.tmdbType || 'movie', String(e.tmdbId || ''), Math.round(eloForKey(rankKeyOf(e))), nowIso]);
+  if (!ranking.length) {
+    const clr = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Elo!A2:D10000')}:clear`,
+      { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' }, body: '{}' }
+    );
+    await sheetsResponseOrThrow(clr, 'Clear Elo');
+    return;
+  }
+  const values = ranking.map(e => [e.tmdbType || 'movie', cellToTmdbId(e.tmdbId), Math.round(eloForKey(rankKeyOf(e))), nowIso]);
   const data = [{ range: 'Elo!A2:D', values }];
   const wr = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
@@ -1151,11 +1166,19 @@ async function writeEloToSheet() {
       body: JSON.stringify({ valueInputOption:'RAW', data }) }
   );
   await sheetsResponseOrThrow(wr, 'Save Elo');
+  const firstClearRow = Math.max(2, ranking.length + 2);
+  const clearRange = `Elo!A${firstClearRow}:D10000`;
+  const clr = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(clearRange)}:clear`,
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' }, body: '{}' }
+  );
+  await sheetsResponseOrThrow(clr, 'Clear Elo tail');
 }
 
 async function upsertEloRow(key) {
   if (_eloRowByKey.has(key)) return _eloRowByKey.get(key);
-  const [tmdbType, tmdbId] = key.split(':');
+  const [tmdbType, rawId] = key.split(':');
+  const tmdbId = cellToTmdbId(rawId);
   const nowIso = new Date().toISOString();
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Elo!A:D')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
   const r = await fetch(url, { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
@@ -1176,7 +1199,8 @@ async function flushElo(keys) {
     let rowNum = _eloRowByKey.get(key);
     if (!rowNum) rowNum = await upsertEloRow(key);
     if (!rowNum) continue;
-    data.push({ range:`Elo!A${rowNum}:D${rowNum}`, values:[[key.split(':')[0] || 'movie', key.split(':')[1] || '', Math.round(eloForKey(key)), nowIso]] });
+    const { tmdbType: tt, tmdbId: ti } = splitRankRowKeyParts(key);
+    data.push({ range:`Elo!A${rowNum}:D${rowNum}`, values:[[tt || 'movie', cellToTmdbId(ti), Math.round(eloForKey(key)), nowIso]] });
   }
   if (!data.length) return;
   const wr = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`, {
@@ -1197,8 +1221,16 @@ async function countMatchupsFromSheet() {
 async function writeFullRankingToSheet() {
   await ensureAccessTokenFresh();
   dedupeRankingByKey();
+  if (!ranking.length) {
+    const clr = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Rankings!A2:F10000')}:clear`,
+      { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' }, body: '{}' }
+    );
+    await sheetsResponseOrThrow(clr, 'Clear Rankings');
+    return;
+  }
   const nowIso = new Date().toISOString();
-  const values = ranking.map((e, i) => [e.tmdbType || 'movie', String(e.tmdbId || ''), e.title || '', e.year || '', i + 1, nowIso]);
+  const values = ranking.map((e, i) => [e.tmdbType || 'movie', cellToTmdbId(e.tmdbId), e.title || '', e.year || '', i + 1, nowIso]);
   const data = [
     { range: 'Rankings!A2:F', values }
   ];
@@ -1208,6 +1240,14 @@ async function writeFullRankingToSheet() {
       body: JSON.stringify({ valueInputOption:'RAW', data }) }
   );
   await sheetsResponseOrThrow(wr, 'Save Rankings');
+  // Remove leftover rows below the written block (otherwise old duplicates stay visible forever).
+  const firstClearRow = Math.max(2, ranking.length + 2);
+  const clearRange = `Rankings!A${firstClearRow}:F10000`;
+  const clr = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(clearRange)}:clear`,
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' }, body: '{}' }
+  );
+  await sheetsResponseOrThrow(clr, 'Clear Rankings tail');
 }
 
 async function appendMatchupRow(row) {
@@ -1355,6 +1395,7 @@ async function initRankSystem() {
     ensureEloForRanking();
     pruneExcludedFromRanking();
     sortRankingByElo();
+    await writeEloToSheet();
     updateRankTotalsUI();
   } catch (e) {
     console.error(e);
