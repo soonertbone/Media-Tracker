@@ -852,6 +852,26 @@ function rebuildRankingIndex() {
   for (let i = 0; i < ranking.length; i++) rankingByKey.set(rankKeyOf(ranking[i]), i);
 }
 
+/** One row per TMDB key; merges title/year from duplicate rows; preserves first-seen order. */
+function dedupeRankingByKey() {
+  const merged = new Map();
+  const order = [];
+  for (const e of ranking) {
+    const k = rankKeyOf(e);
+    if (!k || k === 'movie:' || k.endsWith(':')) continue;
+    if (!merged.has(k)) {
+      merged.set(k, { tmdbType: e.tmdbType || 'movie', tmdbId: String(e.tmdbId || '').trim(), title: e.title || '', year: e.year || '' });
+      order.push(k);
+    } else {
+      const cur = merged.get(k);
+      if (!String(cur.title || '').trim() && String(e.title || '').trim()) cur.title = e.title;
+      if (!String(cur.year || '').trim() && String(e.year || '').trim()) cur.year = e.year;
+    }
+  }
+  ranking = order.map(k => merged.get(k));
+  rebuildRankingIndex();
+}
+
 function moviesSeenFromLibrary() {
   // Flickchart-like experience: focus on watched movies
   return allItems
@@ -1047,7 +1067,12 @@ async function loadRankingFromSheet() {
   const hasIdx = entries.some(e => Number.isFinite(e.rankIndex) && e.rankIndex > 0);
   if (hasIdx) entries.sort((a, b) => (a.rankIndex || 0) - (b.rankIndex || 0));
   ranking = entries.map(e => ({ tmdbType: e.tmdbType, tmdbId: e.tmdbId, title: e.title, year: e.year }));
-  rebuildRankingIndex();
+  const nBefore = ranking.length;
+  dedupeRankingByKey();
+  if (ranking.length < nBefore) {
+    await writeFullRankingToSheet();
+    _rankingDirty = false;
+  }
 }
 
 async function loadEloFromSheet() {
@@ -1171,6 +1196,7 @@ async function countMatchupsFromSheet() {
 
 async function writeFullRankingToSheet() {
   await ensureAccessTokenFresh();
+  dedupeRankingByKey();
   const nowIso = new Date().toISOString();
   const values = ranking.map((e, i) => [e.tmdbType || 'movie', String(e.tmdbId || ''), e.title || '', e.year || '', i + 1, nowIso]);
   const data = [
@@ -1298,9 +1324,16 @@ async function undoLastMatchup() {
 async function initRankingIfEmpty() {
   if (ranking.length) return;
   const seen = moviesSeenFromLibrary();
+  const byKey = new Map();
+  for (const e of seen) {
+    const k = rankKeyOf(e);
+    if (!k || k === 'movie:') continue;
+    if (!byKey.has(k)) byKey.set(k, e);
+  }
+  const uniq = [...byKey.values()];
   // Stable initial order: title, then year.
-  seen.sort((a, b) => (a.title || '').localeCompare(b.title || '') || String(a.year || '').localeCompare(String(b.year || '')));
-  ranking = seen;
+  uniq.sort((a, b) => (a.title || '').localeCompare(b.title || '') || String(a.year || '').localeCompare(String(b.year || '')));
+  ranking = uniq;
   rebuildRankingIndex();
   await writeFullRankingToSheet();
 }
@@ -1352,11 +1385,23 @@ function pickMatchup() {
   if (pool.length < 2) return null;
   const aIndex = randomInt(0, pool.length - 1);
   const a = pool[aIndex];
+  const aKey = rankKeyOf(a);
   const range = Math.max(1, Number(rankRange || 100));
   const lo = Math.max(0, aIndex - range);
   const hi = Math.min(pool.length - 1, aIndex + range);
   const candidates = [];
-  for (let i = lo; i <= hi; i++) if (i !== aIndex) candidates.push(i);
+  for (let i = lo; i <= hi; i++) {
+    if (i === aIndex) continue;
+    if (rankKeyOf(pool[i]) === aKey) continue;
+    candidates.push(i);
+  }
+  if (!candidates.length) {
+    for (let i = 0; i < pool.length; i++) {
+      if (i === aIndex) continue;
+      if (rankKeyOf(pool[i]) === aKey) continue;
+      candidates.push(i);
+    }
+  }
   if (!candidates.length) return null;
   const bIndex = candidates[randomInt(0, candidates.length - 1)];
   const b = pool[bIndex];
