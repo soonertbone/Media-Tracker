@@ -333,6 +333,16 @@
   /* Ranked list page */
   #ranked-page { display:none; flex:1; overflow-y:auto; padding:18px 16px; }
   #ranked-page.vis { display:block; }
+  .ranked-dual { display:grid; grid-template-columns:1fr 1fr; gap:20px; max-width:1280px; margin:0 auto; align-items:start; }
+  @media (max-width:900px) { .ranked-dual { grid-template-columns:1fr; } }
+  .ranked-dual-col { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; min-width:0; }
+  .ranked-dual-col h3 { font-family:'DM Serif Display',serif; font-size:15px; color:var(--accent); padding:12px 14px; margin:0; border-bottom:1px solid var(--border); }
+  .ranked-dual-col h3 small { display:block; font-family:'DM Sans',sans-serif; font-size:11px; color:var(--muted); font-weight:400; margin-top:4px; }
+  .ranked-dual-lines { padding:4px 10px 12px; }
+  .ranked-line { padding:6px 4px; border-bottom:1px solid var(--border); font-size:13px; line-height:1.35; }
+  .ranked-line:last-child { border-bottom:none; }
+  .ranked-line .rk-num { display:inline-block; min-width:52px; color:var(--accent2); font-weight:700; font-variant-numeric:tabular-nums; }
+  .ranked-line .rk-xref { display:block; color:var(--muted); font-size:11px; margin-top:2px; padding-left:56px; }
   .ranked-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; align-content:start; }
   .ranked-item { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:10px 12px; display:flex; gap:10px; align-items:flex-start; }
   .ranked-num { font-weight:800; color:var(--accent2); min-width:48px; text-align:right; }
@@ -1141,6 +1151,22 @@ function pruneExcludedFromRanking() {
   if (!excludedKeys || !excludedKeys.size) return;
   ranking = ranking.filter(e => !excludedKeys.has(rankKeyOf(e)));
   rebuildRankingIndex();
+}
+
+/** Elo-sorted view only (does not change canonical bump `ranking`). */
+function getEloSortedRanking() {
+  return [...ranking].sort((a, b) => {
+    const ea = eloForKey(rankKeyOf(a));
+    const eb = eloForKey(rankKeyOf(b));
+    if (eb !== ea) return eb - ea;
+    return (a.title || '').localeCompare(b.title || '') || String(a.year || '').localeCompare(String(b.year || ''));
+  });
+}
+
+function buildRankIndexByKey(list) {
+  const m = new Map();
+  for (let i = 0; i < list.length; i++) m.set(rankKeyOf(list[i]), i);
+  return m;
 }
 
 /** Flickchart bump: if winner is below loser, move winner to immediately above loser. */
@@ -2059,6 +2085,16 @@ function uninstallRankKeyboard() {
 }
 
 // ── Ranked list page ──────────────────────────────────────────
+function rankedListLineHtml(entry, rankNum, otherRankNum) {
+  const y = entry.year ? ` (${esc(entry.year)})` : '';
+  const elo = Math.round(eloForKey(rankKeyOf(entry)));
+  return `<div class="ranked-line">` +
+    `<span class="rk-num">#${rankNum}</span>${esc(entry.title || '')}${y}` +
+    `<span style="color:var(--muted);font-size:12px"> · Elo ${elo}</span>` +
+    (Number.isFinite(otherRankNum) ? `<span class="rk-xref">#${otherRankNum} in other list</span>` : '') +
+    `</div>`;
+}
+
 function renderRankedList() {
   const host = document.getElementById('ranked-page');
   if (!host || !host.classList.contains('vis')) return;
@@ -2083,20 +2119,43 @@ function renderRankedList() {
 
   const start = (pageNum - 1) * pageSize;
   const end = Math.min(ranking.length, start + pageSize);
-  const slice = ranking.slice(start, end);
+  const bumpSlice = ranking.slice(start, end);
+  const eloSorted = getEloSortedRanking();
+  const eloByRankKey = buildRankIndexByKey(eloSorted);
+  const eloSlice = eloSorted.slice(start, end);
 
   const countEl = document.getElementById('ranked-count');
-  if (countEl) countEl.textContent = `${ranking.length.toLocaleString()} ranked`;
+  if (countEl) {
+    countEl.textContent = `${ranking.length.toLocaleString()} ranked · page ${pageNum}/${pages}`;
+  }
 
-  host.innerHTML = `<div style="max-width:900px;margin:0 auto"><div id="ranked-basic"></div></div>`;
-  const wrap = document.getElementById('ranked-basic');
-  if (!wrap) return;
-  const lines = slice.map((e, i) => {
+  const bumpLines = bumpSlice.map((e, i) => {
     const n = start + i + 1;
-    const y = e.year ? ` (${esc(e.year)})` : '';
-    return `<div style="padding:6px 2px;border-bottom:1px solid var(--border)"><span style="display:inline-block;min-width:64px;color:var(--muted);font-variant-numeric:tabular-nums">#${n}</span> ${esc(e.title || '')}${y}<span style="color:var(--muted);font-size:12px"> · Elo ${Math.round(eloForKey(rankKeyOf(e)))}</span></div>`;
+    const otherIdx = eloByRankKey.get(rankKeyOf(e));
+    return rankedListLineHtml(e, n, Number.isFinite(otherIdx) ? otherIdx + 1 : null);
   });
-  wrap.innerHTML = lines.join('');
+  const eloLines = eloSlice.map((e, i) => {
+    const n = start + i + 1;
+    const otherIdx = rankingByKey.get(rankKeyOf(e));
+    return rankedListLineHtml(e, n, Number.isFinite(otherIdx) ? otherIdx + 1 : null);
+  });
+
+  const pageLabel = ranking.length
+    ? `#${start + 1}–${end} of ${ranking.length.toLocaleString()}`
+    : 'empty';
+  const emptyRow = '<div class="ranked-line" style="color:var(--muted)">No titles</div>';
+
+  host.innerHTML = `
+    <div class="ranked-dual">
+      <div class="ranked-dual-col">
+        <h3>Bump<small>Head-to-head order · ${esc(pageLabel)}</small></h3>
+        <div class="ranked-dual-lines">${bumpLines.length ? bumpLines.join('') : emptyRow}</div>
+      </div>
+      <div class="ranked-dual-col">
+        <h3>Elo<small>Rating-sorted · ${esc(pageLabel)}</small></h3>
+        <div class="ranked-dual-lines">${eloLines.length ? eloLines.join('') : emptyRow}</div>
+      </div>
+    </div>`;
 }
 
 function ensureSheetId() {
