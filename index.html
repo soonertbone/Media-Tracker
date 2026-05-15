@@ -643,8 +643,8 @@ let pendingReview = null;
 let openPopup    = null;
 let interactiveLogin = false;
 
-// Ranking (Flickchart-like)
-let ranking = []; // ordered list of rank entries (index 0 = #1)
+// Ranking: canonical bump order (index 0 = #1). Elo ratings are secondary (Elo tab only).
+let ranking = [];
 let rankingByKey = new Map(); // key => index
 let matchupCount = 0;
 let matchupStats = new Map(); // key => { wins, total }
@@ -686,12 +686,12 @@ async function drainMatchupPickQueue() {
   }
 }
 
-// Elo ranking
+// Secondary Elo ratings (informational; do not reorder ranking)
 const ELO_DEFAULT = 1500;
 const ELO_K = 32;
 let eloByKey = new Map(); // key => number
 let excludedKeys = new Set(); // key => excluded from ranking/matchups
-let lastCommittedMatchup = null; // { ts, matchup, winnerKey, loserKey, eloBefore:Map, statsBefore:Map, matchupCountBefore, lastWinnerBefore }
+let lastCommittedMatchup = null; // { ts, matchup, winnerKey, loserKey, rankingBefore, eloBefore, statsBefore, ... }
 let lastLoserInfo = null;
 
 // Long-term scaling: avoid O(matchups) scans per load/matchup
@@ -953,6 +953,12 @@ async function setRankMeta(key, value) {
   await sheetsResponseOrThrow(wr, 'Update RankMeta');
 }
 
+async function getRankMeta(key) {
+  const rows = await fetchSheet('RankMeta', 'RankMeta!A2:C');
+  const row = (rows || []).find(r => String(r?.[0] || '').trim() === key);
+  return row ? String(row[1] ?? '') : '';
+}
+
 /** Split RankStats / rank keys (type may include no ":"; TMDB IDs are numeric in Sheets). */
 function splitRankRowKeyParts(key) {
   const i = String(key || '').indexOf(':');
@@ -1137,14 +1143,63 @@ function pruneExcludedFromRanking() {
   rebuildRankingIndex();
 }
 
-function sortRankingByElo() {
-  ranking.sort((a, b) => {
-    const ea = eloForKey(rankKeyOf(a));
-    const eb = eloForKey(rankKeyOf(b));
-    if (eb !== ea) return eb - ea;
-    return (a.title || '').localeCompare(b.title || '');
-  });
+/** Flickchart bump: if winner is below loser, move winner to immediately above loser. */
+function applyBumpResult({ winnerKey, loserKey }) {
+  const wi = rankingByKey.get(winnerKey);
+  const li = rankingByKey.get(loserKey);
+  if (!Number.isFinite(wi) || !Number.isFinite(li) || wi <= li) {
+    return { changed: false, movedBy: 0, loserMovedDownBy: 0 };
+  }
+  const [entry] = ranking.splice(wi, 1);
+  ranking.splice(li, 0, entry);
+  for (let i = li; i <= wi; i++) rankingByKey.set(rankKeyOf(ranking[i]), i);
+  const movedBy = wi - li;
+  return { changed: true, movedBy, loserMovedDownBy: 1 };
+}
+
+function snapshotRankingEntries() {
+  return ranking.map(e => ({
+    tmdbType: e.tmdbType,
+    tmdbId: e.tmdbId,
+    title: e.title,
+    year: e.year
+  }));
+}
+
+/** One-time rebuild of bump order from Matchups history (after switching off Elo-sorted Rankings). */
+async function rebuildBumpOrderFromMatchups() {
+  const undone = await loadUndoneMatchupTimestamps();
+  const rows = await fetchSheet('Matchups', 'Matchups!A2:G');
+  const initial = [...ranking];
+  initial.sort((a, b) =>
+    (a.title || '').localeCompare(b.title || '') ||
+    String(a.year || '').localeCompare(String(b.year || ''))
+  );
+  ranking = initial;
   rebuildRankingIndex();
+
+  const ordered = (rows || [])
+    .map((r, sheetIdx) => ({ r, sheetIdx }))
+    .filter(({ r }) => {
+      const ts = String(r?.[0] || '').trim();
+      return ts && !undone.has(ts);
+    })
+    .sort((a, b) => String(a.r[0]).localeCompare(String(b.r[0])) || a.sheetIdx - b.sheetIdx);
+
+  for (const { r } of ordered) {
+    const aId = cellToTmdbId(r[2]);
+    const bId = cellToTmdbId(r[4]);
+    const wId = cellToTmdbId(r[6]);
+    if (!aId || !bId || !wId) continue;
+    const aKey = `${String(r[1] || 'movie').trim() || 'movie'}:${aId}`;
+    const bKey = `${String(r[3] || 'movie').trim() || 'movie'}:${bId}`;
+    const wKey = `${String(r[5] || 'movie').trim() || 'movie'}:${wId}`;
+    const lKey = wKey === aKey ? bKey : (wKey === bKey ? aKey : null);
+    if (!lKey) continue;
+    applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  }
+  await writeFullRankingToSheet();
+  _rankingDirty = false;
 }
 
 async function writeEloToSheet() {
@@ -1293,8 +1348,8 @@ async function includeEntry(entry, reason) {
   excludedKeys.delete(key);
   if (!rankingByKey.has(key)) {
     ranking.push(entry);
-    eloByKey.set(key, eloForKey(key));
-    sortRankingByElo();
+    eloByKey.set(key, ELO_DEFAULT);
+    rebuildRankingIndex();
   }
   await appendExcludedRow({ entry, reason: reason || 'include' });
   await writeFullRankingToSheet();
@@ -1333,17 +1388,20 @@ async function undoLastMatchup() {
     // Persist the undo marker so counts/stats ignore it on reload
     await appendUndoRow({ ts: last.ts, reason: 'user_undo' });
 
-    // Restore Elo
+    if (last.rankingBefore) {
+      ranking = last.rankingBefore.map(e => ({ ...e }));
+      rebuildRankingIndex();
+      _rankingDirty = true;
+    }
     for (const [k, v] of last.eloBefore.entries()) eloByKey.set(k, v);
-    // Restore stats + matchup count + last winner panel
     for (const [k, v] of last.statsBefore.entries()) matchupStats.set(k, { ...v });
     matchupCount = last.matchupCountBefore;
     lastWinnerInfo = last.lastWinnerBefore;
     lastLoserInfo = last.lastLoserBefore;
 
-    // Re-sort ranking after Elo restore
-    sortRankingByElo();
     await setRankMeta('matchupCount', matchupCount);
+    await writeFullRankingToSheet();
+    _rankingDirty = false;
     await flushElo([...last.eloBefore.keys()]);
     await flushRankStats([...last.statsBefore.keys()]);
 
@@ -1393,8 +1451,12 @@ async function initRankSystem() {
     await rebuildMatchupStatsFromMatchupsSheet();
     await loadEloFromSheet();
     ensureEloForRanking();
+    const orderSource = await getRankMeta('orderSource');
+    if (orderSource !== 'bump') {
+      await rebuildBumpOrderFromMatchups();
+      await setRankMeta('orderSource', 'bump');
+    }
     pruneExcludedFromRanking();
-    sortRankingByElo();
     await writeEloToSheet();
     updateRankTotalsUI();
   } catch (e) {
@@ -1490,6 +1552,7 @@ async function commitMatchup({ matchup, winner, loser }) {
     matchup: JSON.parse(JSON.stringify(matchup)),
     winnerKey: wKey,
     loserKey: lKey,
+    rankingBefore: snapshotRankingEntries(),
     eloBefore: new Map([[wKey, eloForKey(wKey)], [lKey, eloForKey(lKey)]]),
     statsBefore: new Map([
       [aKey, { ...(matchupStats.get(aKey) || { wins: 0, total: 0 }) }],
@@ -1505,11 +1568,11 @@ async function commitMatchup({ matchup, winner, loser }) {
   const wRankBefore = rankingByKey.get(wKey);
   const lRankBefore = rankingByKey.get(lKey);
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
-  sortRankingByElo();
+  const bump = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
   const wAfter = rankingByKey.get(wKey);
   const lAfter = rankingByKey.get(lKey);
-  const movedBy = (Number.isFinite(wRankBefore) && Number.isFinite(wAfter)) ? (wRankBefore - wAfter) : 0;
-  const movedDownBy = (Number.isFinite(lRankBefore) && Number.isFinite(lAfter)) ? (lAfter - lRankBefore) : 0;
+  const movedBy = bump.movedBy;
+  const movedDownBy = bump.loserMovedDownBy;
 
   _rankingDirty = true;
 
@@ -1595,7 +1658,7 @@ function startPlacementForEntry(entry) {
   if (!rankingByKey.has(key)) {
     ranking.push(entry);
     eloByKey.set(key, ELO_DEFAULT);
-    sortRankingByElo();
+    rebuildRankingIndex();
   }
   placementState = { entryKey: key, remaining: 10 };
   showView('rank');
@@ -1780,7 +1843,8 @@ function rankContextBlockFor(entry) {
     html += `<div style="${rowStyle}">` +
       `<span class="rk">#${i + 1}</span> ` +
       `<a data-rk="1" data-key="${esc(rankKeyOf(e))}" href="#" style="${linkStyle}" title="Click to view your review (if any)">${esc(e.title || '')}</a> ` +
-      `<span style="opacity:.7;font-weight:500">(${esc(e.year || '')})</span></div>`;
+      `<span style="opacity:.7;font-weight:500">(${esc(e.year || '')})</span>` +
+      `<span style="opacity:.5;font-size:11px;font-weight:500"> · Elo ${Math.round(eloForKey(rankKeyOf(e)))}</span></div>`;
   }
   if (end < ranking.length - 1) html += `<div style="margin:2px 0;color:var(--muted)">…</div>`;
   html += `</div>`;
@@ -2030,7 +2094,7 @@ function renderRankedList() {
   const lines = slice.map((e, i) => {
     const n = start + i + 1;
     const y = e.year ? ` (${esc(e.year)})` : '';
-    return `<div style="padding:6px 2px;border-bottom:1px solid var(--border)"><span style="display:inline-block;min-width:64px;color:var(--muted);font-variant-numeric:tabular-nums">#${n}</span> ${esc(e.title || '')}${y}</div>`;
+    return `<div style="padding:6px 2px;border-bottom:1px solid var(--border)"><span style="display:inline-block;min-width:64px;color:var(--muted);font-variant-numeric:tabular-nums">#${n}</span> ${esc(e.title || '')}${y}<span style="color:var(--muted);font-size:12px"> · Elo ${Math.round(eloForKey(rankKeyOf(e)))}</span></div>`;
   });
   wrap.innerHTML = lines.join('');
 }
