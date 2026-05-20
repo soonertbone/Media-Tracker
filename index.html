@@ -409,6 +409,17 @@
           <option value="100">±100</option>
           <option value="250">±250</option>
           <option value="500">±500</option>
+          <option value="1000">±1000</option>
+          <option value="0">All</option>
+        </select>
+        <label class="fl" style="margin-left:4px;display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="rank-balance" onchange="onRankBalanceChanged()" style="cursor:pointer">
+          Balance
+        </label>
+        <select id="rank-balance-strength" onchange="onRankBalanceStrengthChanged()" title="Favor titles with fewer past matchups" style="padding:6px 10px;border-radius:8px">
+          <option value="mild">Mild</option>
+          <option value="medium" selected>Medium</option>
+          <option value="strong">Strong</option>
         </select>
         <button type="button" id="rank-undo-btn" onclick="undoLastMatchup()" style="background:rgba(232,126,126,0.08);border:1px solid rgba(232,126,126,0.35);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Undo</button>
         <button type="button" id="rank-next-btn" onclick="beginNextMatchup()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Next</button>
@@ -660,7 +671,11 @@ let matchupCount = 0;
 let matchupStats = new Map(); // key => { wins, total }
 let lastWinnerInfo = null;
 let rankPoolLimit = 0; // 0 = all
-let rankRange = 100;
+let rankRange = 100; // 0 = all ranks in pool
+let rankBalanceExposure = true;
+let rankBalanceStrength = 'medium'; // mild | medium | strong
+
+const RANK_BALANCE_K = { mild: 8, medium: 3, strong: 1 };
 let currentMatchup = null; // {a,b,poolKey,range}
 let _rankInited = false;
 let placementState = null; // { entryKey, remaining }
@@ -1484,6 +1499,7 @@ async function initRankSystem() {
     }
     pruneExcludedFromRanking();
     await writeEloToSheet();
+    loadRankToolbarPrefs();
     updateRankTotalsUI();
   } catch (e) {
     console.error(e);
@@ -1509,15 +1525,54 @@ function randomInt(min, maxInclusive) {
   return lo + Math.floor(Math.random() * (hi - lo + 1));
 }
 
+function rankRangeLabel() {
+  const r = Number(rankRange);
+  if (r === 0) return 'all';
+  return Number.isFinite(r) && r > 0 ? `±${r}` : '±100';
+}
+
+/** Half-width in rank indices; 0 means entire pool. */
+function effectiveRankRangeHalf(poolLen) {
+  const r = Number(rankRange);
+  if (r === 0) return Math.max(0, poolLen - 1);
+  return Math.max(1, Number.isFinite(r) ? r : 100);
+}
+
+function matchupExposureWeight(key) {
+  const t = statsForKey(key).total;
+  const k = RANK_BALANCE_K[rankBalanceStrength] ?? RANK_BALANCE_K.medium;
+  return 1 / (t + k);
+}
+
+/** Pick one index from `indices` (into pool); uniform if balance off. */
+function pickWeightedPoolIndex(pool, indices) {
+  if (!indices.length) return -1;
+  if (!rankBalanceExposure) return indices[randomInt(0, indices.length - 1)];
+  let sum = 0;
+  const weights = indices.map(i => {
+    const w = matchupExposureWeight(rankKeyOf(pool[i]));
+    sum += w;
+    return w;
+  });
+  if (sum <= 0) return indices[randomInt(0, indices.length - 1)];
+  let r = Math.random() * sum;
+  for (let j = 0; j < indices.length; j++) {
+    r -= weights[j];
+    if (r <= 0) return indices[j];
+  }
+  return indices[indices.length - 1];
+}
+
 function pickMatchup() {
   const pool = getRankPool();
   if (pool.length < 2) return null;
-  const aIndex = randomInt(0, pool.length - 1);
+  const allIndices = pool.map((_, i) => i);
+  const aIndex = pickWeightedPoolIndex(pool, allIndices);
   const a = pool[aIndex];
   const aKey = rankKeyOf(a);
-  const range = Math.max(1, Number(rankRange || 100));
-  const lo = Math.max(0, aIndex - range);
-  const hi = Math.min(pool.length - 1, aIndex + range);
+  const half = effectiveRankRangeHalf(pool.length);
+  const lo = Math.max(0, aIndex - half);
+  const hi = Math.min(pool.length - 1, aIndex + half);
   const candidates = [];
   for (let i = lo; i <= hi; i++) {
     if (i === aIndex) continue;
@@ -1532,9 +1587,9 @@ function pickMatchup() {
     }
   }
   if (!candidates.length) return null;
-  const bIndex = candidates[randomInt(0, candidates.length - 1)];
+  const bIndex = pickWeightedPoolIndex(pool, candidates);
   const b = pool[bIndex];
-  return { a, b, aIndexInPool: aIndex, bIndexInPool: bIndex, poolFilter: poolFilterLabel(), range };
+  return { a, b, aIndexInPool: aIndex, bIndexInPool: bIndex, poolFilter: poolFilterLabel(), range: rankRangeLabel() };
 }
 
 function applyEloResult({ winnerKey, loserKey }) {
@@ -1697,12 +1752,12 @@ function beginPlacementMatchup() {
   if (!entry) { placementState = null; beginNextMatchup(); return; }
   if (ranking.length < 2) { placementState = null; beginNextMatchup(); return; }
 
-  // Pick a random opponent (exclude the entry itself)
-  let opponent = null;
-  for (let tries = 0; tries < 10; tries++) {
-    const cand = ranking[randomInt(0, ranking.length - 1)];
-    if (cand && rankKeyOf(cand) !== placementState.entryKey) { opponent = cand; break; }
+  const otherIndices = [];
+  for (let i = 0; i < ranking.length; i++) {
+    if (rankKeyOf(ranking[i]) !== placementState.entryKey) otherIndices.push(i);
   }
+  if (!otherIndices.length) { placementState = null; beginNextMatchup(); return; }
+  const opponent = ranking[pickWeightedPoolIndex(ranking, otherIndices)];
   if (!opponent) { placementState = null; beginNextMatchup(); return; }
   currentMatchup = {
     a: entry,
@@ -2049,18 +2104,75 @@ function renderMatchupUI() {
   updateLastWinnerUI();
 }
 
+function syncRankBalanceStrengthUI() {
+  const sel = document.getElementById('rank-balance-strength');
+  if (sel) sel.disabled = !rankBalanceExposure;
+}
+
+function saveRankToolbarPrefs() {
+  try {
+    localStorage.setItem('mv_rank_prefs', JSON.stringify({
+      pool: rankPoolLimit,
+      range: rankRange,
+      balance: rankBalanceExposure,
+      strength: rankBalanceStrength
+    }));
+  } catch (e) {}
+}
+
+function loadRankToolbarPrefs() {
+  try {
+    const raw = localStorage.getItem('mv_rank_prefs');
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (Number.isFinite(Number(p.pool))) rankPoolLimit = Number(p.pool);
+    if (Number.isFinite(Number(p.range))) rankRange = Number(p.range);
+    if (typeof p.balance === 'boolean') rankBalanceExposure = p.balance;
+    if (p.strength === 'mild' || p.strength === 'medium' || p.strength === 'strong') {
+      rankBalanceStrength = p.strength;
+    }
+    const poolSel = document.getElementById('rank-pool');
+    const rangeSel = document.getElementById('rank-range');
+    const balCb = document.getElementById('rank-balance');
+    const strSel = document.getElementById('rank-balance-strength');
+    if (poolSel) poolSel.value = String(rankPoolLimit);
+    if (rangeSel) rangeSel.value = String(rankRange);
+    if (balCb) balCb.checked = rankBalanceExposure;
+    if (strSel) strSel.value = rankBalanceStrength;
+    syncRankBalanceStrengthUI();
+  } catch (e) {}
+}
+
 function onRankPoolChanged() {
   const sel = document.getElementById('rank-pool');
   const v = sel ? Number(sel.value || 0) : 0;
   rankPoolLimit = Number.isFinite(v) ? v : 0;
+  saveRankToolbarPrefs();
   updateRankTotalsUI();
   beginNextMatchup();
 }
 
 function onRankRangeChanged() {
   const sel = document.getElementById('rank-range');
-  const v = sel ? Number(sel.value || 100) : 100;
+  const v = sel ? Number(sel.value) : 100;
   rankRange = Number.isFinite(v) ? v : 100;
+  saveRankToolbarPrefs();
+  beginNextMatchup();
+}
+
+function onRankBalanceChanged() {
+  const cb = document.getElementById('rank-balance');
+  rankBalanceExposure = !!(cb && cb.checked);
+  syncRankBalanceStrengthUI();
+  saveRankToolbarPrefs();
+  beginNextMatchup();
+}
+
+function onRankBalanceStrengthChanged() {
+  const sel = document.getElementById('rank-balance-strength');
+  const v = sel ? String(sel.value || 'medium') : 'medium';
+  rankBalanceStrength = (v === 'mild' || v === 'strong') ? v : 'medium';
+  saveRankToolbarPrefs();
   beginNextMatchup();
 }
 
@@ -4009,6 +4121,7 @@ function showView(view) {
   }
 
   if (isRank) {
+    loadRankToolbarPrefs();
     updateRankTotalsUI();
     if (!currentMatchup) beginNextMatchup();
     installRankKeyboard();
