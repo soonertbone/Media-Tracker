@@ -3530,24 +3530,14 @@ function cancelTVCollect() {
   pendingTVCollect = null;
 }
 
-/** Normalize a review date string to YYYY-MM-DD, or null if unknown. */
-function normalizeReviewDateString(dateStr) {
-  const s = String(dateStr || '').trim();
-  if (!s || /^unknown/i.test(s)) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) {
-    const pad = n => String(n).padStart(2, '0');
-    return `${iso[1]}-${pad(iso[2])}-${pad(iso[3])}`;
-  }
-  const us = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (us) {
-    const pad = n => String(n).padStart(2, '0');
-    return `${us[3]}-${pad(us[1])}-${pad(us[2])}`;
-  }
-  const parsed = new Date(s);
-  if (!Number.isNaN(parsed.getTime())) return fmtDateYYYYMMDD(parsed);
-  return null;
+function isReviewDateYYYYMMDD(dateStr) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || '').trim());
+}
+
+/** Last watched as [YYYY-MM-DD], or null if unavailable. */
+function reviewDateFromLastWatched(item) {
+  const iso = toIsoDateForLog(item?.lastWatched);
+  return iso || null;
 }
 
 function serializeReviewEntries(entries) {
@@ -3556,16 +3546,15 @@ function serializeReviewEntries(entries) {
     .join('\n---\n');
 }
 
-function normalizeReviewsField(raw) {
-  const entries = parseReviewEntries(raw, { skipDateNormalize: true });
+function normalizeReviewsField(raw, item) {
+  const entries = parseReviewEntries(raw);
+  const fallback = reviewDateFromLastWatched(item);
   let changed = false;
   const out = entries.map(e => {
-    const norm = normalizeReviewDateString(e.date);
-    if (norm && norm !== e.date) {
-      changed = true;
-      return { date: norm, text: e.text };
-    }
-    return e;
+    if (isReviewDateYYYYMMDD(e.date)) return e;
+    if (!fallback) return e;
+    changed = true;
+    return { date: fallback, text: e.text };
   });
   return { normalized: serializeReviewEntries(out), changed };
 }
@@ -3573,16 +3562,23 @@ function normalizeReviewsField(raw) {
 async function migrateReviewDatesInLibrary() {
   if (!accessToken || !allItems.length) return;
   let n = 0;
+  let skipped = 0;
   for (const item of allItems) {
     const raw = String(item.reviews || '').trim();
     if (!raw) continue;
-    const { normalized, changed } = normalizeReviewsField(raw);
-    if (!changed) continue;
+    const { normalized, changed } = normalizeReviewsField(raw, item);
+    if (!changed) {
+      const needsFix = parseReviewEntries(raw)
+        .some(e => !isReviewDateYYYYMMDD(e.date));
+      if (needsFix && !reviewDateFromLastWatched(item)) skipped += 1;
+      continue;
+    }
     item.reviews = normalized;
     await updateCells(item, [{ col: 'REVIEWS', val: normalized }]);
     n += 1;
   }
-  if (n > 0) console.log(`Normalized review dates on ${n} row(s).`);
+  if (n > 0) console.log(`Set review dates from last watched on ${n} row(s).`);
+  if (skipped > 0) console.warn(`Skipped ${skipped} row(s) with legacy review dates but no last watched date.`);
 }
 
 function openReviewModal(item, buttonEl) {
@@ -3597,8 +3593,7 @@ function openReviewModal(item, buttonEl) {
   document.getElementById('review-modal').classList.add('vis');
 }
 
-function parseReviewEntries(raw, opts) {
-  const skipNorm = opts && opts.skipDateNormalize;
+function parseReviewEntries(raw) {
   return String(raw || '')
     .split('\n---\n')
     .map(x => x.trim())
@@ -3607,10 +3602,6 @@ function parseReviewEntries(raw, opts) {
       const m = chunk.match(/^\[(.*?)\]\s*([\s\S]*)$/);
       if (!m) return { date: 'Unknown date', text: chunk };
       let date = String(m[1] || '').trim();
-      if (!skipNorm) {
-        const norm = normalizeReviewDateString(date);
-        if (norm) date = norm;
-      }
       return { date, text: m[2].trim() };
     });
 }
