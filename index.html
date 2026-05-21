@@ -1735,7 +1735,6 @@ async function appendPlacementMatchupRow({ matchup, winner }) {
 
 function startPlacementForEntry(entry) {
   const key = rankKeyOf(entry);
-  if (excludedKeys.has(key)) return;
   if (!rankingByKey.has(key)) {
     ranking.push(entry);
     eloByKey.set(key, ELO_DEFAULT);
@@ -3152,7 +3151,6 @@ async function confirmWatch() {
   if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
 
   const { item, btn } = pendingWatch;
-  const wasWatched = String(item.watched || '').toLowerCase() === 'yes';
   const d = document.getElementById('date-input').value;
   const ratingVal = document.getElementById('date-rating-input').value;
   const hadWatchlist = isWatchlistYes(item.watchlist);
@@ -3183,28 +3181,15 @@ async function confirmWatch() {
     document.getElementById('date-modal').classList.remove('vis');
     pendingWatch = null;
 
-    // If this title was excluded, offer to re-add it when you watch it again.
+    // Every watch (first time or rewatch): placement matchups. Re-include if previously removed from rankings.
     if (item.tmdbId) {
-      const entry = { tmdbType: 'movie', tmdbId: String(item.tmdbId || '').trim(), title: item.title || '', year: item.year || '' };
-      const key = rankKeyOf(entry);
-      if (excludedKeys.has(key)) {
-        const ok = window.confirm(`"${entry.title}" is currently excluded from your rankings.\n\nRe-add it to rankings and future matchups?`);
-        if (ok) {
-          await initRankSystem();
-          await includeEntry(entry, 'include_via_watch');
-        }
-      }
-    }
-
-    // If this was newly marked watched, trigger a 10-match placement flow.
-    if (!wasWatched && item.tmdbId) {
       try {
         await initRankSystem();
         const entry = { tmdbType: 'movie', tmdbId: String(item.tmdbId || '').trim(), title: item.title || '', year: item.year || '' };
-        const key = rankKeyOf(entry);
-        if (entry.tmdbId && !rankingByKey.has(key)) {
-          startPlacementForEntry(entry);
+        if (excludedKeys.has(rankKeyOf(entry))) {
+          await includeEntry(entry, 'include_via_watch');
         }
+        startPlacementForEntry(entry);
       } catch (e) {
         console.error('watched->placement', e);
       }
@@ -3802,19 +3787,6 @@ async function addPickedResult(r) {
     setAddStatus('Added! Refreshing…');
     await loadSheetData();
     closeAddModal();
-    try {
-      await initRankSystem();
-      if (r._type === 'movie') {
-        const entry = { tmdbType: 'movie', tmdbId: String(details.tmdbId || r.id || '').trim(), title: details.title || r.title || '', year: details.year || r.year || '' };
-        const key = rankKeyOf(entry);
-        if (entry.tmdbId && !rankingByKey.has(key)) {
-          // Guided placement matchups to insert new title into your ranking
-          startPlacementForEntry(entry);
-        }
-      }
-    } catch (e) {
-      console.error('startPlacementForEntry', e);
-    }
   } catch (e) {
     console.error(e);
     setAddStatus('Failed to add.');
