@@ -333,8 +333,10 @@
   /* Ranked list page */
   #ranked-page { display:none; flex:1; overflow-y:auto; padding:18px 16px; }
   #ranked-page.vis { display:block; }
-  .ranked-dual { display:grid; grid-template-columns:1fr 1fr; gap:20px; max-width:1280px; margin:0 auto; align-items:start; }
-  @media (max-width:900px) { .ranked-dual { grid-template-columns:1fr; } }
+  .ranked-dual { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; max-width:1560px; margin:0 auto; align-items:start; }
+  @media (max-width:1100px) { .ranked-dual { grid-template-columns:1fr; } }
+  .ranked-blend-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; max-width:1560px; margin:0 auto 14px; padding:10px 12px; background:var(--card); border:1px solid var(--border); border-radius:10px; }
+  .ranked-blend-bar input[type=range] { flex:1; min-width:140px; max-width:280px; accent-color:var(--accent2); }
   .ranked-dual-col { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; min-width:0; }
   .ranked-dual-col h3 { font-family:'DM Serif Display',serif; font-size:15px; color:var(--accent); padding:12px 14px; margin:0; border-bottom:1px solid var(--border); }
   .ranked-dual-col h3 small { display:block; font-family:'DM Sans',sans-serif; font-size:11px; color:var(--muted); font-weight:400; margin-top:4px; }
@@ -426,6 +428,9 @@
       </div>
       <div class="toolbar-gallery-chunk" id="toolbar-ranked-chunk" style="display:none">
         <span class="toolbar-count" id="ranked-count"></span>
+        <label class="fl" style="margin-left:4px">Blend</label>
+        <input type="range" id="ranked-blend-slider" min="0" max="100" step="5" value="50" oninput="onRankedBlendChanged()" title="Weight Bump vs Elo in blended list" style="width:100px;vertical-align:middle">
+        <span id="ranked-blend-label" style="font-size:11px;color:var(--muted);white-space:nowrap">50% Bump · 50% Elo</span>
         <label class="fl" style="margin-left:4px">Show</label>
         <select id="ranked-page-size" onchange="renderRankedList()" style="padding:6px 10px;border-radius:8px">
           <option value="250">250</option>
@@ -672,6 +677,7 @@ let matchupStats = new Map(); // key => { wins, total }
 let lastWinnerInfo = null;
 let rankPoolLimit = 0; // 0 = all
 let rankRange = 100; // 0 = all ranks in pool
+let rankBlendBumpPct = 50; // 0 = all Elo, 100 = all Bump in blended list
 let rankBalanceExposure = true;
 let rankBalanceStrength = 'medium'; // mild | medium | strong
 
@@ -859,6 +865,7 @@ async function loadSheetData() {
     ];
     populateDropdowns();
     applyFilters();
+    migrateReviewDatesInLibrary().catch(e => console.error('migrateReviewDatesInLibrary', e));
     ensureDateColumnFormatsInSheets().catch(e => console.error('ensureDateColumnFormatsInSheets', e));
     ensureWatchLogBandedRange().catch(e => console.error('ensureWatchLogBandedRange', e));
   } catch(e) {
@@ -1182,6 +1189,25 @@ function buildRankIndexByKey(list) {
   const m = new Map();
   for (let i = 0; i < list.length; i++) m.set(rankKeyOf(list[i]), i);
   return m;
+}
+
+/** Lower score = better. rankBlendBumpPct 100 favors bump order, 0 favors Elo. */
+function getBlendedSortedRanking() {
+  const eloSorted = getEloSortedRanking();
+  const eloIdxByKey = buildRankIndexByKey(eloSorted);
+  const wBump = Math.max(0, Math.min(100, Number(rankBlendBumpPct) || 0)) / 100;
+  const wElo = 1 - wBump;
+  const scored = ranking.map((e, bumpIdx) => {
+    const key = rankKeyOf(e);
+    const eloIdx = eloIdxByKey.has(key) ? eloIdxByKey.get(key) : bumpIdx;
+    return { entry: e, score: wBump * bumpIdx + wElo * eloIdx };
+  });
+  scored.sort((a, b) =>
+    a.score - b.score ||
+    (a.entry.title || '').localeCompare(b.entry.title || '') ||
+    String(a.entry.year || '').localeCompare(String(b.entry.year || ''))
+  );
+  return scored.map(s => s.entry);
 }
 
 /** Flickchart bump: if winner is below loser, move winner to immediately above loser. */
@@ -2113,6 +2139,7 @@ function saveRankToolbarPrefs() {
     localStorage.setItem('mv_rank_prefs', JSON.stringify({
       pool: rankPoolLimit,
       range: rankRange,
+      blendPct: rankBlendBumpPct,
       balance: rankBalanceExposure,
       strength: rankBalanceStrength
     }));
@@ -2126,6 +2153,7 @@ function loadRankToolbarPrefs() {
     const p = JSON.parse(raw);
     if (Number.isFinite(Number(p.pool))) rankPoolLimit = Number(p.pool);
     if (Number.isFinite(Number(p.range))) rankRange = Number(p.range);
+    if (Number.isFinite(Number(p.blendPct))) rankBlendBumpPct = Math.max(0, Math.min(100, Number(p.blendPct)));
     if (typeof p.balance === 'boolean') rankBalanceExposure = p.balance;
     if (p.strength === 'mild' || p.strength === 'medium' || p.strength === 'strong') {
       rankBalanceStrength = p.strength;
@@ -2134,8 +2162,11 @@ function loadRankToolbarPrefs() {
     const rangeSel = document.getElementById('rank-range');
     const balCb = document.getElementById('rank-balance');
     const strSel = document.getElementById('rank-balance-strength');
+    const blendSlider = document.getElementById('ranked-blend-slider');
     if (poolSel) poolSel.value = String(rankPoolLimit);
     if (rangeSel) rangeSel.value = String(rankRange);
+    if (blendSlider) blendSlider.value = String(rankBlendBumpPct);
+    updateRankedBlendLabel();
     if (balCb) balCb.checked = rankBalanceExposure;
     if (strSel) strSel.value = rankBalanceStrength;
     syncRankBalanceStrengthUI();
@@ -2195,14 +2226,49 @@ function uninstallRankKeyboard() {
   window.removeEventListener('keydown', onRankKeydown);
 }
 
+function updateRankedBlendLabel() {
+  const el = document.getElementById('ranked-blend-label');
+  if (!el) return;
+  const bump = Math.max(0, Math.min(100, Number(rankBlendBumpPct) || 0));
+  const elo = 100 - bump;
+  el.textContent = `${bump}% Bump · ${elo}% Elo`;
+}
+
+function onRankedBlendChanged() {
+  const slider = document.getElementById('ranked-blend-slider');
+  rankBlendBumpPct = slider ? Math.max(0, Math.min(100, Number(slider.value) || 0)) : 50;
+  updateRankedBlendLabel();
+  saveRankToolbarPrefs();
+  renderRankedList();
+}
+
+function onRankedBlendChangedFromPage(sliderEl) {
+  const v = Math.max(0, Math.min(100, Number(sliderEl?.value) || 0));
+  rankBlendBumpPct = v;
+  const toolbarSlider = document.getElementById('ranked-blend-slider');
+  if (toolbarSlider) toolbarSlider.value = String(v);
+  updateRankedBlendLabel();
+  saveRankToolbarPrefs();
+  renderRankedList();
+}
+
 // ── Ranked list page ──────────────────────────────────────────
-function rankedListLineHtml(entry, rankNum, otherRankNum) {
+function rankedListLineHtml(entry, rankNum, xref) {
   const y = entry.year ? ` (${esc(entry.year)})` : '';
   const elo = Math.round(eloForKey(rankKeyOf(entry)));
+  let xrefHtml = '';
+  if (typeof xref === 'number' && Number.isFinite(xref)) {
+    xrefHtml = `<span class="rk-xref">#${xref} in other list</span>`;
+  } else if (xref && typeof xref === 'object') {
+    const parts = [];
+    if (Number.isFinite(xref.bump)) parts.push(`Bump #${xref.bump}`);
+    if (Number.isFinite(xref.elo)) parts.push(`Elo #${xref.elo}`);
+    if (parts.length) xrefHtml = `<span class="rk-xref">${parts.join(' · ')}</span>`;
+  }
   return `<div class="ranked-line">` +
     `<span class="rk-num">#${rankNum}</span>${esc(entry.title || '')}${y}` +
     `<span style="color:var(--muted);font-size:12px"> · Elo ${elo}</span>` +
-    (Number.isFinite(otherRankNum) ? `<span class="rk-xref">#${otherRankNum} in other list</span>` : '') +
+    xrefHtml +
     `</div>`;
 }
 
@@ -2234,11 +2300,14 @@ function renderRankedList() {
   const eloSorted = getEloSortedRanking();
   const eloByRankKey = buildRankIndexByKey(eloSorted);
   const eloSlice = eloSorted.slice(start, end);
+  const blendedSorted = getBlendedSortedRanking();
+  const blendSlice = blendedSorted.slice(start, end);
 
   const countEl = document.getElementById('ranked-count');
   if (countEl) {
     countEl.textContent = `${ranking.length.toLocaleString()} ranked · page ${pageNum}/${pages}`;
   }
+  updateRankedBlendLabel();
 
   const bumpLines = bumpSlice.map((e, i) => {
     const n = start + i + 1;
@@ -2250,13 +2319,31 @@ function renderRankedList() {
     const otherIdx = rankingByKey.get(rankKeyOf(e));
     return rankedListLineHtml(e, n, Number.isFinite(otherIdx) ? otherIdx + 1 : null);
   });
+  const blendLines = blendSlice.map((e, i) => {
+    const n = start + i + 1;
+    const key = rankKeyOf(e);
+    const bumpIdx = rankingByKey.get(key);
+    const eloIdx = eloByRankKey.get(key);
+    return rankedListLineHtml(e, n, {
+      bump: Number.isFinite(bumpIdx) ? bumpIdx + 1 : null,
+      elo: Number.isFinite(eloIdx) ? eloIdx + 1 : null
+    });
+  });
 
   const pageLabel = ranking.length
     ? `#${start + 1}–${end} of ${ranking.length.toLocaleString()}`
     : 'empty';
+  const blendLabel = `${Math.round(rankBlendBumpPct)}% Bump · ${100 - Math.round(rankBlendBumpPct)}% Elo`;
   const emptyRow = '<div class="ranked-line" style="color:var(--muted)">No titles</div>';
 
   host.innerHTML = `
+    <div class="ranked-blend-bar">
+      <span style="font-size:12px;color:var(--muted)">Blended list weight</span>
+      <span style="font-size:11px;color:var(--text)">Bump</span>
+      <input type="range" id="ranked-blend-slider-inline" min="0" max="100" step="5" value="${Math.round(rankBlendBumpPct)}" oninput="onRankedBlendChangedFromPage(this)">
+      <span style="font-size:11px;color:var(--text)">Elo</span>
+      <span id="ranked-blend-label-inline" style="font-size:11px;color:var(--accent2)">${esc(blendLabel)}</span>
+    </div>
     <div class="ranked-dual">
       <div class="ranked-dual-col">
         <h3>Bump<small>Head-to-head order · ${esc(pageLabel)}</small></h3>
@@ -2265,6 +2352,10 @@ function renderRankedList() {
       <div class="ranked-dual-col">
         <h3>Elo<small>Rating-sorted · ${esc(pageLabel)}</small></h3>
         <div class="ranked-dual-lines">${eloLines.length ? eloLines.join('') : emptyRow}</div>
+      </div>
+      <div class="ranked-dual-col">
+        <h3>Blend<small>${esc(blendLabel)} · ${esc(pageLabel)}</small></h3>
+        <div class="ranked-dual-lines">${blendLines.length ? blendLines.join('') : emptyRow}</div>
       </div>
     </div>`;
 }
@@ -3458,6 +3549,61 @@ function cancelTVCollect() {
   pendingTVCollect = null;
 }
 
+/** Normalize a review date string to YYYY-MM-DD, or null if unknown. */
+function normalizeReviewDateString(dateStr) {
+  const s = String(dateStr || '').trim();
+  if (!s || /^unknown/i.test(s)) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${iso[1]}-${pad(iso[2])}-${pad(iso[3])}`;
+  }
+  const us = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (us) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${us[3]}-${pad(us[1])}-${pad(us[2])}`;
+  }
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) return fmtDateYYYYMMDD(parsed);
+  return null;
+}
+
+function serializeReviewEntries(entries) {
+  return entries
+    .map(e => `[${e.date}] ${e.text}`)
+    .join('\n---\n');
+}
+
+function normalizeReviewsField(raw) {
+  const entries = parseReviewEntries(raw, { skipDateNormalize: true });
+  let changed = false;
+  const out = entries.map(e => {
+    const norm = normalizeReviewDateString(e.date);
+    if (norm && norm !== e.date) {
+      changed = true;
+      return { date: norm, text: e.text };
+    }
+    return e;
+  });
+  return { normalized: serializeReviewEntries(out), changed };
+}
+
+async function migrateReviewDatesInLibrary() {
+  if (!accessToken || !allItems.length) return;
+  let n = 0;
+  for (const item of allItems) {
+    const raw = String(item.reviews || '').trim();
+    if (!raw) continue;
+    const { normalized, changed } = normalizeReviewsField(raw);
+    if (!changed) continue;
+    item.reviews = normalized;
+    await updateCells(item, [{ col: 'REVIEWS', val: normalized }]);
+    n += 1;
+  }
+  if (n > 0) console.log(`Normalized review dates on ${n} row(s).`);
+}
+
 function openReviewModal(item, buttonEl) {
   pendingReview = { item, buttonEl };
   document.getElementById('review-modal-title').textContent = item.title;
@@ -3470,7 +3616,8 @@ function openReviewModal(item, buttonEl) {
   document.getElementById('review-modal').classList.add('vis');
 }
 
-function parseReviewEntries(raw) {
+function parseReviewEntries(raw, opts) {
+  const skipNorm = opts && opts.skipDateNormalize;
   return String(raw || '')
     .split('\n---\n')
     .map(x => x.trim())
@@ -3478,7 +3625,12 @@ function parseReviewEntries(raw) {
     .map(chunk => {
       const m = chunk.match(/^\[(.*?)\]\s*([\s\S]*)$/);
       if (!m) return { date: 'Unknown date', text: chunk };
-      return { date: m[1], text: m[2].trim() };
+      let date = String(m[1] || '').trim();
+      if (!skipNorm) {
+        const norm = normalizeReviewDateString(date);
+        if (norm) date = norm;
+      }
+      return { date, text: m[2].trim() };
     });
 }
 
@@ -3490,7 +3642,7 @@ function confirmReview() {
   const stamp = fmtDateYYYYMMDD();
   const entry = `[${stamp}] ${txt}`;
   item.reviews = item.reviews ? `${item.reviews}\n---\n${entry}` : entry;
-  updateCells(item,[{col:'REVIEWS',val:item.reviews}]);
+  updateCells(item, [{ col: 'REVIEWS', val: item.reviews }]);
   if (buttonEl) buttonEl.classList.add('has-review');
   cancelReview();
 }
