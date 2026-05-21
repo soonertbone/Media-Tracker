@@ -335,8 +335,6 @@
   #ranked-page.vis { display:block; }
   .ranked-dual { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; max-width:1560px; margin:0 auto; align-items:start; }
   @media (max-width:1100px) { .ranked-dual { grid-template-columns:1fr; } }
-  .ranked-blend-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; max-width:1560px; margin:0 auto 14px; padding:10px 12px; background:var(--card); border:1px solid var(--border); border-radius:10px; }
-  .ranked-blend-bar input[type=range] { flex:1; min-width:140px; max-width:280px; accent-color:var(--accent2); }
   .ranked-dual-col { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; min-width:0; }
   .ranked-dual-col h3 { font-family:'DM Serif Display',serif; font-size:15px; color:var(--accent); padding:12px 14px; margin:0; border-bottom:1px solid var(--border); }
   .ranked-dual-col h3 small { display:block; font-family:'DM Sans',sans-serif; font-size:11px; color:var(--muted); font-weight:400; margin-top:4px; }
@@ -2242,16 +2240,6 @@ function onRankedBlendChanged() {
   renderRankedList();
 }
 
-function onRankedBlendChangedFromPage(sliderEl) {
-  const v = Math.max(0, Math.min(100, Number(sliderEl?.value) || 0));
-  rankBlendBumpPct = v;
-  const toolbarSlider = document.getElementById('ranked-blend-slider');
-  if (toolbarSlider) toolbarSlider.value = String(v);
-  updateRankedBlendLabel();
-  saveRankToolbarPrefs();
-  renderRankedList();
-}
-
 // ── Ranked list page ──────────────────────────────────────────
 function rankedListLineHtml(entry, rankNum, xref) {
   const y = entry.year ? ` (${esc(entry.year)})` : '';
@@ -2337,13 +2325,6 @@ function renderRankedList() {
   const emptyRow = '<div class="ranked-line" style="color:var(--muted)">No titles</div>';
 
   host.innerHTML = `
-    <div class="ranked-blend-bar">
-      <span style="font-size:12px;color:var(--muted)">Blended list weight</span>
-      <span style="font-size:11px;color:var(--text)">Bump</span>
-      <input type="range" id="ranked-blend-slider-inline" min="0" max="100" step="5" value="${Math.round(rankBlendBumpPct)}" oninput="onRankedBlendChangedFromPage(this)">
-      <span style="font-size:11px;color:var(--text)">Elo</span>
-      <span id="ranked-blend-label-inline" style="font-size:11px;color:var(--accent2)">${esc(blendLabel)}</span>
-    </div>
     <div class="ranked-dual">
       <div class="ranked-dual-col">
         <h3>Bump<small>Head-to-head order · ${esc(pageLabel)}</small></h3>
