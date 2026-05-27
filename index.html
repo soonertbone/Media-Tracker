@@ -3128,6 +3128,7 @@ function makeCard(item) {
   const acts=document.createElement('div'); acts.className='card-actions';
   const bW=actBtn('act-watch','✓','Mark as watched');
   bW.onclick=()=>logWatch(item,bW,pw);
+  attachLongPressRankToWatchBtn(bW, item);
   // Set initial TV button appearance after card is in DOM
   if (item._type==='tv') {
     const cachedTotal = tmdbSeasonCache[item.tmdbId];
@@ -3188,6 +3189,68 @@ function noPoster(title) {
 
 function actBtn(cls,text,title) {
   const b=document.createElement('button'); b.className='act '+cls; b.textContent=text; b.title=title; return b;
+}
+
+function rankEntryForItem(item) {
+  const id = String(item?.tmdbId || '').trim();
+  if (!id) return null;
+  return {
+    tmdbType: item._type === 'tv' ? 'tv' : 'movie',
+    tmdbId: id,
+    title: item.title || '',
+    year: item.year || ''
+  };
+}
+
+async function promptManualPlacementForItem(item) {
+  const entry = rankEntryForItem(item);
+  if (!entry) return;
+  await initRankSystem();
+  const key = rankKeyOf(entry);
+  if (excludedKeys.has(key)) {
+    await includeEntry(entry, 'include_via_manual_rank');
+  }
+  startPlacementForEntry(entry);
+}
+
+function attachLongPressRankToWatchBtn(btn, item) {
+  if (!btn) return;
+  const entry = rankEntryForItem(item);
+  if (!entry) return; // no TMDB id → can't rank
+
+  const LONG_PRESS_MS = 650;
+  let timer = null;
+  let fired = false;
+
+  const clear = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+
+  btn.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return; // only primary
+    fired = false;
+    clear();
+    timer = setTimeout(() => {
+      fired = true;
+      clear();
+      // Start placement only if user confirms (and do not log a watch).
+      const ok = window.confirm(`Rank "${item.title || 'this title'}" now?`);
+      if (!ok) return;
+      void promptManualPlacementForItem(item).catch(err => console.error('manual-rank', err));
+    }, LONG_PRESS_MS);
+  });
+
+  const cancelEvents = ['pointerup', 'pointercancel', 'pointerleave', 'blur', 'contextmenu'];
+  cancelEvents.forEach(ev => btn.addEventListener(ev, clear));
+
+  // If long-press fired, suppress the normal click (watch logging).
+  btn.addEventListener('click', (e) => {
+    if (!fired) return;
+    e.preventDefault();
+    e.stopPropagation();
+    fired = false;
+  }, true);
 }
 
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -3298,20 +3361,6 @@ async function confirmWatch() {
     btn.title = 'Log another watch';
     document.getElementById('date-modal').classList.remove('vis');
     pendingWatch = null;
-
-    // Every watch (first time or rewatch): placement matchups. Re-include if previously removed from rankings.
-    if (item.tmdbId) {
-      try {
-        await initRankSystem();
-        const entry = { tmdbType: 'movie', tmdbId: String(item.tmdbId || '').trim(), title: item.title || '', year: item.year || '' };
-        if (excludedKeys.has(rankKeyOf(entry))) {
-          await includeEntry(entry, 'include_via_watch');
-        }
-        startPlacementForEntry(entry);
-      } catch (e) {
-        console.error('watched->placement', e);
-      }
-    }
   } catch (e) {
     console.error(e);
     if (errEl) {
