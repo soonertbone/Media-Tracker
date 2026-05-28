@@ -314,7 +314,10 @@
   #rank-page.vis { display:flex; }
   .rank-layout { display:grid; grid-template-columns:280px 1fr 320px; gap:16px; padding:16px; width:100%; overflow:hidden; }
   @media (max-width:980px) { .rank-layout { grid-template-columns:1fr; } }
-  .rank-panel { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+  .rank-panel { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; min-height:0; transition:border-color .25s, box-shadow .25s; }
+  .rank-panel.rank-last-winner-underdog { border-color:rgba(91,186,138,.75); box-shadow:0 0 0 1px rgba(91,186,138,.4); }
+  .rank-panel.rank-last-winner-underdog h3 { color:var(--watched); }
+  .rank-panel.rank-last-winner-underdog .body { background:rgba(91,186,138,.1); }
   .rank-panel h3 { font-family:'DM Serif Display',serif; font-size:14px; color:var(--accent); padding:14px 14px 10px; border-bottom:1px solid var(--border); }
   .rank-panel .body { padding:12px 14px; overflow:auto; }
   .rank-context { font-size:12px; color:var(--muted); line-height:1.55; }
@@ -882,11 +885,42 @@ async function loadSheetData() {
 function cellToTmdbId(v) {
   if (v === null || v === undefined) return '';
   if (typeof v === 'number' && Number.isFinite(v)) return String(Math.trunc(v));
-  return String(v).trim();
+  let s = String(v).trim();
+  if (s.startsWith("'")) s = s.slice(1).trim();
+  if (/^\d+\.0+$/.test(s)) s = String(parseInt(s, 10));
+  return s;
 }
 
 function rankKeyOf(entry) {
-  return `${entry.tmdbType || 'movie'}:${cellToTmdbId(entry?.tmdbId)}`;
+  const type = String(entry?.tmdbType || 'movie').trim().toLowerCase() || 'movie';
+  const id = cellToTmdbId(entry?.tmdbId);
+  return `${type}:${id}`;
+}
+
+function countRankingDuplicateKeys() {
+  const seen = new Set();
+  let dupes = 0;
+  for (const e of ranking) {
+    const k = rankKeyOf(e);
+    if (!k || k.endsWith(':')) continue;
+    if (seen.has(k)) dupes += 1;
+    else seen.add(k);
+  }
+  return dupes;
+}
+
+/** Collapse in-memory dupes and persist Rankings sheet when any were removed. */
+async function repairRankingDuplicates() {
+  const before = ranking.length;
+  if (!before) return 0;
+  dedupeRankingByKey();
+  const removed = before - ranking.length;
+  if (removed > 0) {
+    _rankingDirty = true;
+    await writeFullRankingToSheet();
+    console.log(`Removed ${removed} duplicate ranking entr${removed === 1 ? 'y' : 'ies'}.`);
+  }
+  return removed;
 }
 
 function rebuildRankingIndex() {
@@ -1116,12 +1150,11 @@ async function loadRankingFromSheet() {
   const hasIdx = entries.some(e => Number.isFinite(e.rankIndex) && e.rankIndex > 0);
   if (hasIdx) entries.sort((a, b) => (a.rankIndex || 0) - (b.rankIndex || 0));
   ranking = entries.map(e => ({ tmdbType: e.tmdbType, tmdbId: e.tmdbId, title: e.title, year: e.year }));
-  const beforeKeys = ranking.map(e => rankKeyOf(e)).join('\x1f');
   const sheetEntryCount = ranking.length;
+  const dupesBefore = countRankingDuplicateKeys();
   dedupeRankingByKey();
-  const afterKeys = ranking.map(e => rankKeyOf(e)).join('\x1f');
-  // Write only when dedupe changed order/length or sheet likely has stale trailing rows.
-  if (beforeKeys !== afterKeys || sheetEntryCount > ranking.length) {
+  // Always rewrite when dupes existed or trailing sheet rows may be stale.
+  if (dupesBefore > 0 || sheetEntryCount > ranking.length) {
     await writeFullRankingToSheet();
   }
   _rankingDirty = false;
@@ -1420,6 +1453,7 @@ async function includeEntry(entry, reason) {
   const key = rankKeyOf(entry);
   if (!entry || !entry.tmdbId || key.endsWith(':')) return;
   excludedKeys.delete(key);
+  dedupeRankingByKey();
   if (!rankingByKey.has(key)) {
     ranking.push(entry);
     eloByKey.set(key, ELO_DEFAULT);
@@ -1532,6 +1566,7 @@ async function initRankSystem() {
         await setRankMeta('orderSource', 'bump');
       }
       pruneExcludedFromRanking();
+      await repairRankingDuplicates();
       await writeEloToSheet();
       loadRankToolbarPrefs();
       updateRankTotalsUI();
@@ -1690,9 +1725,6 @@ async function commitMatchup({ matchup, winner, loser }) {
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
   const bump = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
   const wAfter = rankingByKey.get(wKey);
-  const lAfter = rankingByKey.get(lKey);
-  const movedBy = bump.movedBy;
-  const movedDownBy = bump.loserMovedDownBy;
 
   _rankingDirty = true;
 
@@ -1716,6 +1748,21 @@ async function commitMatchup({ matchup, winner, loser }) {
   await flushElo([wKey, lKey]);
   await flushRankStats([...new Set([aKey, bKey, wKey, lKey])]);
 
+  setLastWinnerFromMatchup({
+    winner, loser, wKey, lKey, bump, eloDelta, ts,
+    wRankBefore, lRankBefore
+  });
+
+  updateRankTotalsUI();
+  updateLastWinnerUI();
+}
+
+function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, ts, wRankBefore, lRankBefore }) {
+  const wAfter = rankingByKey.get(wKey);
+  const lAfter = rankingByKey.get(lKey);
+  const movedBy = bump.movedBy;
+  const movedDownBy = bump.loserMovedDownBy;
+  const underdogWin = Number.isFinite(wRankBefore) && Number.isFinite(lRankBefore) && wRankBefore > lRankBefore;
   const s = statsForKey(wKey);
   const ls = statsForKey(lKey);
   lastWinnerInfo = {
@@ -1730,6 +1777,7 @@ async function commitMatchup({ matchup, winner, loser }) {
     winPct: s.total ? (s.wins / s.total) : 0,
     eloAfter: Math.round(eloForKey(wKey)),
     eloChange: Math.round(eloDelta.winnerEloAfter - eloDelta.winnerEloBefore),
+    underdogWin,
     ts
   };
   lastLoserInfo = {
@@ -1746,9 +1794,6 @@ async function commitMatchup({ matchup, winner, loser }) {
     eloChange: Math.round(eloDelta.loserEloAfter - eloDelta.loserEloBefore),
     ts
   };
-
-  updateRankTotalsUI();
-  updateLastWinnerUI();
 }
 
 async function appendPlacementMatchupRow({ matchup, winner }) {
@@ -1773,6 +1818,7 @@ async function appendPlacementMatchupRow({ matchup, winner }) {
 }
 
 function startPlacementForEntry(entry) {
+  dedupeRankingByKey();
   const key = rankKeyOf(entry);
   if (!rankingByKey.has(key)) {
     ranking.push(entry);
@@ -1817,14 +1863,22 @@ async function commitPlacementMatchup({ matchup, winner, loser }) {
   const bKey = rankKeyOf(matchup.b);
   const wKey = rankKeyOf(winner);
   const lKey = rankKeyOf(loser);
-  applyEloResult({ winnerKey: wKey, loserKey: lKey });
-  applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  const wRankBefore = rankingByKey.get(wKey);
+  const lRankBefore = rankingByKey.get(lKey);
+  const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
+  const bump = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
   _rankingDirty = true;
   [aKey, bKey, wKey, lKey].forEach(k => _placementKeysTouched.add(k));
   await appendPlacementMatchupRow({ matchup, winner });
   bumpStatsForMatchup({ aKey, bKey, wKey });
   matchupCount += 1;
+  const ts = new Date().toISOString();
+  setLastWinnerFromMatchup({
+    winner, loser, wKey, lKey, bump, eloDelta, ts,
+    wRankBefore, lRankBefore
+  });
   updateRankTotalsUI();
+  updateLastWinnerUI();
 }
 
 async function finishPlacementSession() {
@@ -1911,7 +1965,7 @@ function ensureRankPageBuilt() {
         </div>
       </div>
 
-      <div class="rank-panel">
+      <div class="rank-panel" id="rank-last-winner-panel">
         <h3>Last winner</h3>
         <div class="body">
           <div class="rank-context" id="rank-last-winner"></div>
@@ -2025,11 +2079,16 @@ function updateRankTotalsUI() {
 
 function updateLastWinnerUI() {
   const el = document.getElementById('rank-last-winner');
+  const panel = document.getElementById('rank-last-winner-panel');
+  if (panel) panel.classList.toggle('rank-last-winner-underdog', !!(lastWinnerInfo && lastWinnerInfo.underdogWin));
   if (!el) return;
   if (!lastWinnerInfo) {
     el.innerHTML = `<div style="color:var(--muted)">No matchups yet.</div>`;
     return;
   }
+  const upsetBadge = lastWinnerInfo.underdogWin
+    ? `<div style="margin-bottom:8px;color:var(--watched);font-size:11px;font-weight:600">Underdog win</div>`
+    : '';
   const movedLine = lastWinnerInfo.moved
     ? `Moved up <span class="rk">${lastWinnerInfo.movedBy}</span> spot(s) to <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`
     : `Stayed at <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`;
@@ -2051,6 +2110,7 @@ function updateLastWinnerUI() {
   ` : '';
 
   el.innerHTML = `
+    ${upsetBadge}
     <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Winner</div>
     <div style="margin-top:6px"><span class="me">${esc(lastWinnerInfo.title)}</span> <span style="opacity:.7">(${esc(lastWinnerInfo.year)})</span></div>
     <div style="margin-top:8px">${movedLine}</div>
@@ -2316,6 +2376,9 @@ function rankedListLineHtml(entry, rankNum, xref) {
 function renderRankedList() {
   const host = document.getElementById('ranked-page');
   if (!host || !host.classList.contains('vis')) return;
+  const lenBefore = ranking.length;
+  dedupeRankingByKey();
+  if (ranking.length < lenBefore) _rankingDirty = true;
 
   const pageSizeSel = document.getElementById('ranked-page-size');
   const pageSel = document.getElementById('ranked-page-num');
