@@ -426,6 +426,7 @@
         </select>
         <button type="button" id="rank-undo-btn" onclick="undoLastMatchup()" style="background:rgba(232,126,126,0.08);border:1px solid rgba(232,126,126,0.35);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Undo</button>
         <button type="button" id="rank-next-btn" onclick="beginNextMatchup()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Next</button>
+        <button type="button" id="rank-reset-btn" onclick="confirmResetRankings()" title="Clear matchup history and re-seed from watched movies" style="background:rgba(232,126,126,0.06);border:1px solid rgba(232,126,126,0.28);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Reset rankings</button>
       </div>
       <div class="toolbar-gallery-chunk" id="toolbar-ranked-chunk" style="display:none">
         <span class="toolbar-count" id="ranked-count"></span>
@@ -732,6 +733,10 @@ let lastLoserInfo = null;
 let _rankStatsRowByKey = new Map(); // key => sheet row number (2+)
 let _eloRowByKey = new Map(); // key => sheet row number (2+)
 let _rankingDirty = false;
+let _eloDirty = false;
+let _rankStatsDirty = false;
+let _persistRankTimer = null;
+let _rankPersistPromise = null;
 
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
@@ -1164,16 +1169,13 @@ async function loadEloFromSheet() {
   const rows = await fetchSheet('Elo', 'Elo!A2:D');
   const m = new Map();
   const rowBy = new Map();
-  (rows || []).forEach(r => {
-    if (!r || r[1] === '' || r[1] === null || r[1] === undefined) return;
-    const key = `${String(r[0] || 'movie')}:${cellToTmdbId(r[1])}`;
-    const elo = Number(r[2]);
-    if (!key.endsWith(':') && Number.isFinite(elo)) m.set(key, elo);
-  });
   (rows || []).forEach((r, idx) => {
     if (!r || r[1] === '' || r[1] === null || r[1] === undefined) return;
-    const key = `${String(r[0] || 'movie')}:${cellToTmdbId(r[1])}`;
-    if (!key.endsWith(':')) rowBy.set(key, idx + 2);
+    const key = rankKeyOf({ tmdbType: r[0], tmdbId: r[1] });
+    if (key.endsWith(':')) return;
+    const elo = Number(r[2]);
+    if (Number.isFinite(elo)) m.set(key, elo);
+    rowBy.set(key, idx + 2);
   });
   eloByKey = m;
   _eloRowByKey = rowBy;
@@ -1309,15 +1311,21 @@ async function rebuildBumpOrderFromMatchups() {
   _rankingDirty = false;
 }
 
+async function clearSheetValuesRange(rangeA1, label) {
+  await ensureAccessTokenFresh();
+  const clr = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(rangeA1)}:clear`,
+    { method: 'POST', headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' }, body: '{}' }
+  );
+  await sheetsResponseOrThrow(clr, label || 'Clear sheet range');
+}
+
 async function writeEloToSheet() {
   await ensureAccessTokenFresh();
   const nowIso = new Date().toISOString();
   if (!ranking.length) {
-    const clr = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent('Elo!A2:D10000')}:clear`,
-      { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' }, body: '{}' }
-    );
-    await sheetsResponseOrThrow(clr, 'Clear Elo');
+    await clearSheetValuesRange('Elo!A2:D10000', 'Clear Elo');
+    _eloRowByKey = new Map();
     return;
   }
   const values = ranking.map(e => [e.tmdbType || 'movie', cellToTmdbId(e.tmdbId), Math.round(eloForKey(rankKeyOf(e))), nowIso]);
@@ -1329,12 +1337,75 @@ async function writeEloToSheet() {
   );
   await sheetsResponseOrThrow(wr, 'Save Elo');
   const firstClearRow = Math.max(2, ranking.length + 2);
-  const clearRange = `Elo!A${firstClearRow}:D10000`;
-  const clr = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(clearRange)}:clear`,
-    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' }, body: '{}' }
+  await clearSheetValuesRange(`Elo!A${firstClearRow}:D10000`, 'Clear Elo tail');
+  _eloRowByKey = new Map();
+  values.forEach((row, i) => {
+    const key = rankKeyOf({ tmdbType: row[0], tmdbId: row[1] });
+    if (!key.endsWith(':')) _eloRowByKey.set(key, i + 2);
+  });
+}
+
+/** Full rewrite of RankStats from in-memory stats (avoids duplicate append rows). */
+async function writeRankStatsToSheet() {
+  await ensureAccessTokenFresh();
+  const nowIso = new Date().toISOString();
+  if (!ranking.length) {
+    await clearSheetValuesRange('RankStats!A2:E10000', 'Clear RankStats');
+    _rankStatsRowByKey = new Map();
+    return;
+  }
+  const values = ranking.map(e => {
+    const key = rankKeyOf(e);
+    const s = statsForKey(key);
+    return [e.tmdbType || 'movie', cellToTmdbId(e.tmdbId), s.wins || 0, s.total || 0, nowIso];
+  });
+  const data = [{ range: 'RankStats!A2:E', values }];
+  const wr = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
+    { method:'POST', headers:{ Authorization:'Bearer '+accessToken, 'Content-Type':'application/json' },
+      body: JSON.stringify({ valueInputOption:'RAW', data }) }
   );
-  await sheetsResponseOrThrow(clr, 'Clear Elo tail');
+  await sheetsResponseOrThrow(wr, 'Save RankStats');
+  const firstClearRow = Math.max(2, ranking.length + 2);
+  await clearSheetValuesRange(`RankStats!A${firstClearRow}:E10000`, 'Clear RankStats tail');
+  _rankStatsRowByKey = new Map();
+  values.forEach((row, i) => {
+    const key = rankKeyOf({ tmdbType: row[0], tmdbId: row[1] });
+    if (!key.endsWith(':')) _rankStatsRowByKey.set(key, i + 2);
+  });
+}
+
+function schedulePersistRankState() {
+  if (_persistRankTimer) clearTimeout(_persistRankTimer);
+  _persistRankTimer = setTimeout(() => {
+    _persistRankTimer = null;
+    persistRankStateToSheet().catch(e => console.error('persistRankStateToSheet', e));
+  }, 900);
+}
+
+async function persistRankStateToSheet() {
+  if (_rankPersistPromise) return _rankPersistPromise;
+  if (!_rankingDirty && !_eloDirty && !_rankStatsDirty) return;
+  _rankPersistPromise = (async () => {
+    try {
+      if (!accessToken) return;
+      if (_rankingDirty) {
+        await writeFullRankingToSheet();
+        _rankingDirty = false;
+      }
+      if (_eloDirty) {
+        await writeEloToSheet();
+        _eloDirty = false;
+      }
+      if (_rankStatsDirty) {
+        await writeRankStatsToSheet();
+        _rankStatsDirty = false;
+      }
+    } finally {
+      _rankPersistPromise = null;
+    }
+  })();
+  return _rankPersistPromise;
 }
 
 async function upsertEloRow(key) {
@@ -1508,10 +1579,10 @@ async function undoLastMatchup() {
     lastLoserInfo = last.lastLoserBefore;
 
     await setRankMeta('matchupCount', matchupCount);
-    await writeFullRankingToSheet();
-    _rankingDirty = false;
-    await flushElo([...last.eloBefore.keys()]);
-    await flushRankStats([...last.statsBefore.keys()]);
+    _rankingDirty = true;
+    _eloDirty = true;
+    _rankStatsDirty = true;
+    await persistRankStateToSheet();
 
     updateRankTotalsUI();
     updateLastWinnerUI();
@@ -1527,21 +1598,113 @@ async function undoLastMatchup() {
   }
 }
 
-async function initRankingIfEmpty() {
-  if (ranking.length) return;
-  const seen = moviesSeenFromLibrary();
+/** In-memory seed: watched movies, A–Z; stats/Elo at zero/default. */
+function buildFreshRankingFromWatchedMovies() {
   const byKey = new Map();
-  for (const e of seen) {
+  for (const e of moviesSeenFromLibrary()) {
     const k = rankKeyOf(e);
-    if (!k || k === 'movie:') continue;
+    if (!k || k === 'movie:' || k.endsWith(':')) continue;
     if (!byKey.has(k)) byKey.set(k, e);
   }
   const uniq = [...byKey.values()];
-  // Stable initial order: title, then year.
-  uniq.sort((a, b) => (a.title || '').localeCompare(b.title || '') || String(a.year || '').localeCompare(String(b.year || '')));
+  uniq.sort((a, b) =>
+    (a.title || '').localeCompare(b.title || '') ||
+    String(a.year || '').localeCompare(String(b.year || ''))
+  );
   ranking = uniq;
-  rebuildRankingIndex();
+  dedupeRankingByKey();
+  pruneExcludedFromRanking();
+  matchupStats = new Map();
+  eloByKey = new Map();
+  for (const e of ranking) {
+    const k = rankKeyOf(e);
+    matchupStats.set(k, { wins: 0, total: 0 });
+    eloByKey.set(k, ELO_DEFAULT);
+  }
+  matchupCount = 0;
+  lastWinnerInfo = null;
+  lastLoserInfo = null;
+  lastCommittedMatchup = null;
+  return ranking.length;
+}
+
+async function resetAllRankings() {
+  await ensureAccessTokenFresh();
+  await ensureRankingTabs();
+  await loadExcludedFromSheet();
+
+  await clearSheetValuesRange('Matchups!A2:L10000', 'Clear Matchups');
+  await clearSheetValuesRange('MatchupUndo!A2:C10000', 'Clear MatchupUndo');
+  await clearSheetValuesRange('RankStats!A2:E10000', 'Clear RankStats');
+  await clearSheetValuesRange('Elo!A2:D10000', 'Clear Elo');
+  await clearSheetValuesRange('Rankings!A2:F10000', 'Clear Rankings');
+  await clearSheetValuesRange('RankMeta!A2:C10000', 'Clear RankMeta');
+
+  const n = buildFreshRankingFromWatchedMovies();
+  _eloRowByKey = new Map();
+  _rankStatsRowByKey = new Map();
+  _rankingDirty = false;
+  _eloDirty = false;
+  _rankStatsDirty = false;
+
   await writeFullRankingToSheet();
+  await writeEloToSheet();
+  await writeRankStatsToSheet();
+  await setRankMeta('matchupCount', 0);
+  await setRankMeta('orderSource', 'bump');
+
+  currentMatchup = null;
+  placementState = null;
+  _placementKeysTouched = new Set();
+  updateRankTotalsUI();
+  updateLastWinnerUI();
+  return n;
+}
+
+async function confirmResetRankings() {
+  if (!accessToken) {
+    alert('Sign in first to reset rankings.');
+    return;
+  }
+  const msg =
+    'Reset ALL ranking history?\n\n' +
+    'This clears Matchups, Elo, RankStats, and Rankings, then rebuilds from every watched movie (movies only).\n\n' +
+    'Excluded titles stay excluded. Movies, TV, reviews, and watch log are not changed.\n\n' +
+    'Have you made a backup copy of this spreadsheet?';
+  if (!window.confirm(msg)) return;
+  if (!window.confirm('Final confirmation: permanently delete ranking history and re-seed?')) return;
+
+  const btn = document.getElementById('rank-reset-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
+  try {
+    if (!ensureSheetId()) {
+      alert('No spreadsheet configured.');
+      return;
+    }
+    await ensureAccessTokenFresh();
+    const n = await resetAllRankings();
+    _rankInited = true;
+    alert(
+      `Rankings reset complete.\n\n${n.toLocaleString()} watched movies seeded (A–Z). ` +
+      'Use Rank matchups or long-press ✓ on a movie to place it.'
+    );
+    showView('rank');
+    beginNextMatchup();
+    renderMatchupUI();
+  } catch (e) {
+    console.error('resetAllRankings', e);
+    alert(e.message || 'Reset failed. Check your connection and try again.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Reset rankings'; }
+  }
+}
+
+async function initRankingIfEmpty() {
+  if (ranking.length) return;
+  buildFreshRankingFromWatchedMovies();
+  await writeFullRankingToSheet();
+  await writeEloToSheet();
+  await writeRankStatsToSheet();
 }
 
 async function initRankSystem() {
@@ -1567,7 +1730,6 @@ async function initRankSystem() {
       }
       pruneExcludedFromRanking();
       await repairRankingDuplicates();
-      await writeEloToSheet();
       loadRankToolbarPrefs();
       updateRankTotalsUI();
     } catch (e) {
@@ -1745,8 +1907,9 @@ async function commitMatchup({ matchup, winner, loser }) {
   bumpStatsForMatchup({ aKey, bKey, wKey });
   matchupCount += 1;
   await setRankMeta('matchupCount', matchupCount);
-  await flushElo([wKey, lKey]);
-  await flushRankStats([...new Set([aKey, bKey, wKey, lKey])]);
+  _eloDirty = true;
+  _rankStatsDirty = true;
+  schedulePersistRankState();
 
   setLastWinnerFromMatchup({
     winner, loser, wKey, lKey, bump, eloDelta, ts,
@@ -1887,8 +2050,10 @@ async function finishPlacementSession() {
   if (!keys.length) return;
   try {
     await setRankMeta('matchupCount', matchupCount);
-    await flushElo(keys);
-    await flushRankStats(keys);
+    _rankingDirty = true;
+    _eloDirty = true;
+    _rankStatsDirty = true;
+    await persistRankStateToSheet();
   } catch (e) {
     console.error('finishPlacementSession', e);
   }
@@ -4407,18 +4572,23 @@ function showView(view) {
     installRankKeyboard();
   } else {
     uninstallRankKeyboard();
-    if (placementState || (_placementKeysTouched && _placementKeysTouched.size)) {
-      if (placementState) placementState = null;
-      finishPlacementSession().catch(e => console.error('finishPlacementSession', e));
-    }
+    void (async () => {
+      if (placementState || (_placementKeysTouched && _placementKeysTouched.size)) {
+        if (placementState) placementState = null;
+        await finishPlacementSession();
+      } else if (_rankingDirty || _eloDirty || _rankStatsDirty) {
+        await persistRankStateToSheet();
+      }
+    })().catch(e => console.error('persist leaving rank', e));
   }
 
   if (isRanked) {
-    // Only persist Rankings ordering when needed (avoids per-matchup full rewrites).
-    if (_rankingDirty) {
-      writeFullRankingToSheet().then(() => { _rankingDirty = false; }).catch(e => console.error('writeFullRankingToSheet', e));
-    }
-    renderRankedList();
+    void persistRankStateToSheet()
+      .then(() => renderRankedList())
+      .catch(e => {
+        console.error('persistRankStateToSheet', e);
+        renderRankedList();
+      });
   }
 }
 
