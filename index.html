@@ -426,6 +426,7 @@
         </select>
         <button type="button" id="rank-undo-btn" onclick="undoLastMatchup()" style="background:rgba(232,126,126,0.08);border:1px solid rgba(232,126,126,0.35);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Undo</button>
         <button type="button" id="rank-next-btn" onclick="beginNextMatchup()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Next</button>
+        <button type="button" id="rank-reseed-btn" onclick="confirmReseedRankings()" title="Rebuild Rankings/Elo from watched movies (keeps matchup history)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Seed from watched</button>
         <button type="button" id="rank-reset-btn" onclick="confirmResetRankings()" title="Clear matchup history and re-seed from watched movies" style="background:rgba(232,126,126,0.06);border:1px solid rgba(232,126,126,0.28);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Reset rankings</button>
       </div>
       <div class="toolbar-gallery-chunk" id="toolbar-ranked-chunk" style="display:none">
@@ -873,6 +874,7 @@ async function loadSheetData() {
     ];
     populateDropdowns();
     applyFilters();
+    showLoading(false);
     // Defer review migration so initial load + rank init are not competing for write quota.
     setTimeout(() => {
       migrateReviewDatesInLibrary().catch(e => console.error('migrateReviewDatesInLibrary', e));
@@ -953,16 +955,53 @@ function dedupeRankingByKey() {
   rebuildRankingIndex();
 }
 
+function isMovieWatched(item) {
+  if (!item || item._type !== 'movie') return false;
+  const w = String(item.watched || '').trim().toLowerCase();
+  if (w === 'yes' || w === 'true' || w === 'y' || w === '1' || w === 'x') return true;
+  if (w === 'no' || w === 'dropped') return false;
+  if ((parseInt(item.times, 10) || 0) > 0) return true;
+  if (String(item.lastWatched || '').trim()) return true;
+  return false;
+}
+
+function getSeedCandidateStats() {
+  const movies = allItems.filter(i => i && i._type === 'movie');
+  const watched = movies.filter(isMovieWatched);
+  const withTmdb = watched.filter(i => cellToTmdbId(i.tmdbId));
+  return { movies: movies.length, watched: watched.length, withTmdb: withTmdb.length };
+}
+
 function moviesSeenFromLibrary() {
-  // Flickchart-like experience: focus on watched movies
   return allItems
-    .filter(i => i && i._type === 'movie' && String(i.watched || '').toLowerCase() === 'yes' && String(i.tmdbId || '').trim())
+    .filter(i => i && i._type === 'movie' && isMovieWatched(i) && cellToTmdbId(i.tmdbId))
     .map(i => ({
       tmdbType: 'movie',
       tmdbId: cellToTmdbId(i.tmdbId),
       title: i.title || '',
       year: i.year || ''
     }));
+}
+
+async function reloadLibraryFromSheets() {
+  if (!ensureSheetId()) throw new Error('No spreadsheet configured.');
+  await ensureAccessTokenFresh();
+  const [movies, shows] = await Promise.all([
+    fetchSheet('Movies'), fetchSheet('TV Shows'),
+  ]);
+  allItems = [
+    ...movies.slice(1).filter(r => r[0]).map((r, i) => rowToItem(r, MC, 'movie', i + 2)),
+    ...shows.slice(1).filter(r => r[0]).map((r, i) => rowToItem(r, TC, 'tv', i + 2)),
+  ];
+}
+
+function seedCandidateErrorMessage() {
+  const s = getSeedCandidateStats();
+  return (
+    `Could not seed rankings: found ${s.watched} watched movie(s) in your sheet, ` +
+    `${s.withTmdb} with a TMDB id (${s.movies} movies total). ` +
+    'Each ranked title needs a TMDB id on the Movies tab, plus Watched = Yes, Times ≥ 1, or a Last watched date.'
+  );
 }
 
 async function ensureRankingTabs() {
@@ -1628,10 +1667,39 @@ function buildFreshRankingFromWatchedMovies() {
   return ranking.length;
 }
 
+/** Write Rankings + Elo + RankStats from current in-memory ranking (no history clear). */
+async function reseedRankingsFromLibrary() {
+  await ensureAccessTokenFresh();
+  await ensureRankingTabs();
+  await reloadLibraryFromSheets();
+  await loadExcludedFromSheet();
+
+  const n = buildFreshRankingFromWatchedMovies();
+  if (n === 0) throw new Error(seedCandidateErrorMessage());
+
+  _eloRowByKey = new Map();
+  _rankStatsRowByKey = new Map();
+  _rankingDirty = false;
+  _eloDirty = false;
+  _rankStatsDirty = false;
+
+  await writeFullRankingToSheet();
+  await writeEloToSheet();
+  await writeRankStatsToSheet();
+
+  updateRankTotalsUI();
+  updateLastWinnerUI();
+  return n;
+}
+
 async function resetAllRankings() {
   await ensureAccessTokenFresh();
   await ensureRankingTabs();
+  await reloadLibraryFromSheets();
   await loadExcludedFromSheet();
+
+  const n = buildFreshRankingFromWatchedMovies();
+  if (n === 0) throw new Error(seedCandidateErrorMessage());
 
   await clearSheetValuesRange('Matchups!A2:L10000', 'Clear Matchups');
   await clearSheetValuesRange('MatchupUndo!A2:C10000', 'Clear MatchupUndo');
@@ -1640,7 +1708,7 @@ async function resetAllRankings() {
   await clearSheetValuesRange('Rankings!A2:F10000', 'Clear Rankings');
   await clearSheetValuesRange('RankMeta!A2:C10000', 'Clear RankMeta');
 
-  const n = buildFreshRankingFromWatchedMovies();
+  matchupCount = 0;
   _eloRowByKey = new Map();
   _rankStatsRowByKey = new Map();
   _rankingDirty = false;
@@ -1659,6 +1727,35 @@ async function resetAllRankings() {
   updateRankTotalsUI();
   updateLastWinnerUI();
   return n;
+}
+
+async function confirmReseedRankings() {
+  if (!accessToken) {
+    alert('Sign in first.');
+    return;
+  }
+  if (!window.confirm(
+    'Rebuild Rankings, Elo, and RankStats from all watched movies (A–Z)?\n\nMatchup history is not cleared.'
+  )) return;
+
+  const btn = document.getElementById('rank-reseed-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Seeding…'; }
+  try {
+    if (!ensureSheetId()) {
+      alert('No spreadsheet configured.');
+      return;
+    }
+    const n = await reseedRankingsFromLibrary();
+    _rankInited = true;
+    alert(`Seeded ${n.toLocaleString()} watched movies into Rankings (A–Z).`);
+    showView('ranked');
+    renderRankedList();
+  } catch (e) {
+    console.error('reseedRankingsFromLibrary', e);
+    alert(e.message || 'Seed failed.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Seed from watched'; }
+  }
 }
 
 async function confirmResetRankings() {
@@ -1701,7 +1798,12 @@ async function confirmResetRankings() {
 
 async function initRankingIfEmpty() {
   if (ranking.length) return;
-  buildFreshRankingFromWatchedMovies();
+  if (!allItems.length) await reloadLibraryFromSheets();
+  const n = buildFreshRankingFromWatchedMovies();
+  if (n === 0) {
+    console.warn('initRankingIfEmpty: no seed candidates', getSeedCandidateStats());
+    return;
+  }
   await writeFullRankingToSheet();
   await writeEloToSheet();
   await writeRankStatsToSheet();
