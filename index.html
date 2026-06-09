@@ -78,6 +78,16 @@
   .app-chrome.stats-view .toolbar-gallery-chunk { display:none !important; }
   .app-chrome.stats-view .filter-panel { display:none !important; }
   .app-chrome.stats-view .btn-filters { display:none !important; }
+  .sheet-sync-indicator {
+    display:none; align-items:center; gap:6px; font-size:11px; color:var(--accent2);
+    white-space:nowrap; flex-shrink:0; padding:0 4px;
+  }
+  .sheet-sync-indicator.vis { display:inline-flex; }
+  .sheet-sync-indicator::before {
+    content:''; width:6px; height:6px; border-radius:50%; background:var(--accent2);
+    animation:sheet-sync-pulse 1s ease-in-out infinite;
+  }
+  @keyframes sheet-sync-pulse { 0%,100%{opacity:.35} 50%{opacity:1} }
   /* Legacy modal label class */
   .fl { font-size:11px; color:var(--muted); white-space:nowrap; }
 
@@ -382,6 +392,7 @@
         <button type="button" class="type-btn" id="nav-ranked" onclick="showView('ranked')">List</button>
         <button type="button" class="type-btn" id="nav-stats" onclick="showView('stats')">Stats</button>
       </div>
+      <span id="sheet-sync-indicator" class="sheet-sync-indicator" aria-live="polite" title="Saving ranking data to spreadsheet"></span>
       <div class="toolbar-gallery-chunk" id="toolbar-gallery-chunk">
         <div class="type-toggle">
           <button class="type-btn active" id="tb-all"    onclick="setType('all')">All</button>
@@ -736,8 +747,42 @@ let _eloRowByKey = new Map(); // key => sheet row number (2+)
 let _rankingDirty = false;
 let _eloDirty = false;
 let _rankStatsDirty = false;
+let _matchupCountDirty = false;
+let _pendingEloKeys = new Set();
+let _pendingRankStatsKeys = new Set();
+let _persistEpoch = 0;
 let _persistRankTimer = null;
 let _rankPersistPromise = null;
+
+function bumpPersistEpoch() {
+  _persistEpoch++;
+}
+
+function markRankPersistDirty({ ranking, elo, stats, meta } = {}) {
+  bumpPersistEpoch();
+  if (ranking) _rankingDirty = true;
+  if (elo) _eloDirty = true;
+  if (stats) _rankStatsDirty = true;
+  if (meta) _matchupCountDirty = true;
+  updateSheetSyncUI();
+}
+
+function updateSheetSyncUI() {
+  const el = document.getElementById('sheet-sync-indicator');
+  if (!el) return;
+  const pending = !!(_rankingDirty || _eloDirty || _rankStatsDirty || _matchupCountDirty);
+  const active = !!_rankPersistPromise;
+  const waiting = !!_persistRankTimer;
+  const show = pending || active || waiting;
+  el.classList.toggle('vis', show);
+  el.textContent = active ? 'Syncing…' : 'Pending sync…';
+}
+
+function markFullRankPersist() {
+  _pendingEloKeys.clear();
+  _pendingRankStatsKeys.clear();
+  markRankPersistDirty({ ranking: true, elo: true, stats: true, meta: true });
+}
 
 // ── Auth (with token persistence) ───────────────────────────
 function loadGIS() {
@@ -1131,6 +1176,70 @@ async function rebuildMatchupStatsFromMatchupsSheet() {
   matchupStats = stats;
 }
 
+/** Source of truth: replay Elo from every non-undone Matchups row (like RankStats). */
+async function rebuildEloFromMatchupsSheet() {
+  const undone = await loadUndoneMatchupTimestamps();
+  const rows = await fetchSheet('Matchups', 'Matchups!A2:G');
+  const ordered = (rows || [])
+    .map((r, sheetIdx) => ({ r, sheetIdx }))
+    .filter(({ r }) => {
+      const ts = String(r?.[0] || '').trim();
+      return ts && !undone.has(ts);
+    })
+    .sort((a, b) => String(a.r[0]).localeCompare(String(b.r[0])) || a.sheetIdx - b.sheetIdx);
+  if (!ordered.length) return;
+
+  const replayed = new Map();
+  const ensure = (key) => {
+    if (!key || key.endsWith(':')) return;
+    if (!replayed.has(key)) replayed.set(key, ELO_DEFAULT);
+  };
+  for (const { r } of ordered) {
+    const aId = cellToTmdbId(r[2]);
+    const bId = cellToTmdbId(r[4]);
+    const wId = cellToTmdbId(r[6]);
+    if (!aId || !bId || !wId) continue;
+    const aKey = `${String(r[1] || 'movie').trim() || 'movie'}:${aId}`;
+    const bKey = `${String(r[3] || 'movie').trim() || 'movie'}:${bId}`;
+    const wKey = `${String(r[5] || 'movie').trim() || 'movie'}:${wId}`;
+    const lKey = wKey === aKey ? bKey : (wKey === bKey ? aKey : null);
+    if (!lKey) continue;
+    ensure(wKey);
+    ensure(lKey);
+    const rw = replayed.get(wKey);
+    const rl = replayed.get(lKey);
+    const expectedW = 1 / (1 + Math.pow(10, (rl - rw) / 400));
+    const expectedL = 1 - expectedW;
+    replayed.set(wKey, rw + ELO_K * (1 - expectedW));
+    replayed.set(lKey, rl + ELO_K * (0 - expectedL));
+  }
+  for (const [k, v] of replayed.entries()) eloByKey.set(k, v);
+}
+
+/** Fix Elo tab rows that drifted from in-memory values (e.g. after lost writes). */
+async function repairStaleEloSheetRows() {
+  if (!_pendingEloKeys.size && !_eloDirty) {
+    const rows = await fetchSheet('Elo', 'Elo!A2:D');
+    const sheetElo = new Map();
+    (rows || []).forEach(r => {
+      if (!r || r[1] === '' || r[1] === null || r[1] === undefined) return;
+      const key = rankKeyOf({ tmdbType: r[0], tmdbId: r[1] });
+      if (key.endsWith(':')) return;
+      const elo = Number(r[2]);
+      if (Number.isFinite(elo)) sheetElo.set(key, Math.round(elo));
+    });
+    const toFlush = [];
+    for (const e of ranking) {
+      const key = rankKeyOf(e);
+      if (!(statsForKey(key).total > 0)) continue;
+      const expected = Math.round(eloForKey(key));
+      const sheet = sheetElo.get(key);
+      if (!Number.isFinite(sheet) || sheet !== expected) toFlush.push(key);
+    }
+    if (toFlush.length) await flushElo(toFlush);
+  }
+}
+
 async function upsertRankStatsRow(key) {
   if (_rankStatsRowByKey.has(key)) return _rankStatsRowByKey.get(key);
   const { tmdbType, tmdbId } = splitRankRowKeyParts(key);
@@ -1291,6 +1400,10 @@ function getBlendedSortedRanking() {
   return scored.map(s => s.entry);
 }
 
+function buildBlendRankIndexByKey() {
+  return buildRankIndexByKey(getBlendedSortedRanking());
+}
+
 /** Flickchart bump: if winner is below loser, move winner to immediately above loser. */
 function applyBumpResult({ winnerKey, loserKey }) {
   const wi = rankingByKey.get(winnerKey);
@@ -1416,32 +1529,60 @@ async function writeRankStatsToSheet() {
 
 function schedulePersistRankState() {
   if (_persistRankTimer) clearTimeout(_persistRankTimer);
+  updateSheetSyncUI();
   _persistRankTimer = setTimeout(() => {
     _persistRankTimer = null;
+    updateSheetSyncUI();
     persistRankStateToSheet().catch(e => console.error('persistRankStateToSheet', e));
-  }, 900);
+  }, 1200);
 }
 
 async function persistRankStateToSheet() {
   if (_rankPersistPromise) return _rankPersistPromise;
-  if (!_rankingDirty && !_eloDirty && !_rankStatsDirty) return;
+  if (!_rankingDirty && !_eloDirty && !_rankStatsDirty && !_matchupCountDirty) return;
   _rankPersistPromise = (async () => {
     try {
       if (!accessToken) return;
-      if (_rankingDirty) {
-        await writeFullRankingToSheet();
-        _rankingDirty = false;
-      }
-      if (_eloDirty) {
-        await writeEloToSheet();
-        _eloDirty = false;
-      }
-      if (_rankStatsDirty) {
-        await writeRankStatsToSheet();
-        _rankStatsDirty = false;
+      updateSheetSyncUI();
+      while (_rankingDirty || _eloDirty || _rankStatsDirty || _matchupCountDirty) {
+        const epoch = _persistEpoch;
+        const doRanking = _rankingDirty;
+        const doElo = _eloDirty;
+        const doStats = _rankStatsDirty;
+        const doMeta = _matchupCountDirty;
+        const eloKeys = doElo ? [..._pendingEloKeys] : [];
+        const statsKeys = doStats ? [..._pendingRankStatsKeys] : [];
+
+        if (doRanking) await writeFullRankingToSheet();
+        if (doElo) {
+          if (eloKeys.length) await flushElo(eloKeys);
+          else await writeEloToSheet();
+        }
+        if (doStats) {
+          if (statsKeys.length) await flushRankStats(statsKeys);
+          else await writeRankStatsToSheet();
+        }
+        if (doMeta) await setRankMeta('matchupCount', matchupCount);
+
+        if (_persistEpoch !== epoch) continue;
+
+        if (doRanking) _rankingDirty = false;
+        if (doElo) {
+          _eloDirty = false;
+          eloKeys.forEach(k => _pendingEloKeys.delete(k));
+        }
+        if (doStats) {
+          _rankStatsDirty = false;
+          statsKeys.forEach(k => _pendingRankStatsKeys.delete(k));
+        }
+        if (doMeta) _matchupCountDirty = false;
       }
     } finally {
       _rankPersistPromise = null;
+      updateSheetSyncUI();
+      if (_rankingDirty || _eloDirty || _rankStatsDirty || _matchupCountDirty) {
+        schedulePersistRankState();
+      }
     }
   })();
   return _rankPersistPromise;
@@ -1609,7 +1750,6 @@ async function undoLastMatchup() {
     if (last.rankingBefore) {
       ranking = last.rankingBefore.map(e => ({ ...e }));
       rebuildRankingIndex();
-      _rankingDirty = true;
     }
     for (const [k, v] of last.eloBefore.entries()) eloByKey.set(k, v);
     for (const [k, v] of last.statsBefore.entries()) matchupStats.set(k, { ...v });
@@ -1617,10 +1757,7 @@ async function undoLastMatchup() {
     lastWinnerInfo = last.lastWinnerBefore;
     lastLoserInfo = last.lastLoserBefore;
 
-    await setRankMeta('matchupCount', matchupCount);
-    _rankingDirty = true;
-    _eloDirty = true;
-    _rankStatsDirty = true;
+    markFullRankPersist();
     await persistRankStateToSheet();
 
     updateRankTotalsUI();
@@ -1825,6 +1962,8 @@ async function initRankSystem() {
       await rebuildMatchupStatsFromMatchupsSheet();
       await loadEloFromSheet();
       ensureEloForRanking();
+      await rebuildEloFromMatchupsSheet();
+      await repairStaleEloSheetRows();
       const orderSource = await getRankMeta('orderSource');
       if (orderSource !== 'bump') {
         await rebuildBumpOrderFromMatchups();
@@ -1984,13 +2123,11 @@ async function commitMatchup({ matchup, winner, loser }) {
     lastLoserBefore: lastLoserInfo ? { ...lastLoserInfo } : null
   };
 
-  const wRankBefore = rankingByKey.get(wKey);
-  const lRankBefore = rankingByKey.get(lKey);
+  const blendBefore = buildBlendRankIndexByKey();
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
-  const bump = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  const blendAfter = buildBlendRankIndexByKey();
   const wAfter = rankingByKey.get(wKey);
-
-  _rankingDirty = true;
 
   const ts = new Date().toISOString();
   if (lastCommittedMatchup) lastCommittedMatchup.ts = ts;
@@ -2008,26 +2145,32 @@ async function commitMatchup({ matchup, winner, loser }) {
 
   bumpStatsForMatchup({ aKey, bKey, wKey });
   matchupCount += 1;
-  await setRankMeta('matchupCount', matchupCount);
-  _eloDirty = true;
-  _rankStatsDirty = true;
+  _pendingEloKeys.add(wKey);
+  _pendingEloKeys.add(lKey);
+  _pendingRankStatsKeys.add(aKey);
+  _pendingRankStatsKeys.add(bKey);
+  markRankPersistDirty({ ranking: true, elo: true, stats: true, meta: true });
   schedulePersistRankState();
 
   setLastWinnerFromMatchup({
-    winner, loser, wKey, lKey, bump, eloDelta, ts,
-    wRankBefore, lRankBefore
+    winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter
   });
 
   updateRankTotalsUI();
   updateLastWinnerUI();
 }
 
-function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, ts, wRankBefore, lRankBefore }) {
-  const wAfter = rankingByKey.get(wKey);
-  const lAfter = rankingByKey.get(lKey);
-  const movedBy = bump.movedBy;
-  const movedDownBy = bump.loserMovedDownBy;
-  const underdogWin = Number.isFinite(wRankBefore) && Number.isFinite(lRankBefore) && wRankBefore > lRankBefore;
+function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter }) {
+  const wBlendBefore = blendBefore.get(wKey);
+  const wBlendAfter = blendAfter.get(wKey);
+  const lBlendBefore = blendBefore.get(lKey);
+  const lBlendAfter = blendAfter.get(lKey);
+  const movedBy = (Number.isFinite(wBlendBefore) && Number.isFinite(wBlendAfter))
+    ? Math.max(0, wBlendBefore - wBlendAfter) : 0;
+  const movedDownBy = (Number.isFinite(lBlendBefore) && Number.isFinite(lBlendAfter))
+    ? Math.max(0, lBlendAfter - lBlendBefore) : 0;
+  const underdogWin = Number.isFinite(wBlendBefore) && Number.isFinite(lBlendBefore) && wBlendBefore > lBlendBefore;
+  const blendLabel = `${Math.round(rankBlendBumpPct)}% Bump · ${100 - Math.round(rankBlendBumpPct)}% Elo`;
   const s = statsForKey(wKey);
   const ls = statsForKey(lKey);
   lastWinnerInfo = {
@@ -2035,8 +2178,9 @@ function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, t
     title: winner.title || '',
     year: winner.year || '',
     moved: movedBy > 0,
-    movedBy: movedBy > 0 ? movedBy : 0,
-    rankAfter: Number.isFinite(wAfter) ? (wAfter + 1) : null,
+    movedBy,
+    rankAfter: Number.isFinite(wBlendAfter) ? wBlendAfter + 1 : null,
+    blendLabel,
     wins: s.wins,
     total: s.total,
     winPct: s.total ? (s.wins / s.total) : 0,
@@ -2050,8 +2194,9 @@ function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, t
     title: loser.title || '',
     year: loser.year || '',
     movedDown: movedDownBy > 0,
-    movedDownBy: movedDownBy > 0 ? movedDownBy : 0,
-    rankAfter: Number.isFinite(lAfter) ? (lAfter + 1) : null,
+    movedDownBy,
+    rankAfter: Number.isFinite(lBlendAfter) ? lBlendAfter + 1 : null,
+    blendLabel,
     wins: ls.wins,
     total: ls.total,
     winPct: ls.total ? (ls.wins / ls.total) : 0,
@@ -2128,10 +2273,10 @@ async function commitPlacementMatchup({ matchup, winner, loser }) {
   const bKey = rankKeyOf(matchup.b);
   const wKey = rankKeyOf(winner);
   const lKey = rankKeyOf(loser);
-  const wRankBefore = rankingByKey.get(wKey);
-  const lRankBefore = rankingByKey.get(lKey);
+  const blendBefore = buildBlendRankIndexByKey();
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
-  const bump = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  const blendAfter = buildBlendRankIndexByKey();
   _rankingDirty = true;
   [aKey, bKey, wKey, lKey].forEach(k => _placementKeysTouched.add(k));
   await appendPlacementMatchupRow({ matchup, winner });
@@ -2139,8 +2284,7 @@ async function commitPlacementMatchup({ matchup, winner, loser }) {
   matchupCount += 1;
   const ts = new Date().toISOString();
   setLastWinnerFromMatchup({
-    winner, loser, wKey, lKey, bump, eloDelta, ts,
-    wRankBefore, lRankBefore
+    winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter
   });
   updateRankTotalsUI();
   updateLastWinnerUI();
@@ -2151,10 +2295,11 @@ async function finishPlacementSession() {
   _placementKeysTouched = new Set();
   if (!keys.length) return;
   try {
-    await setRankMeta('matchupCount', matchupCount);
-    _rankingDirty = true;
-    _eloDirty = true;
-    _rankStatsDirty = true;
+    keys.forEach(k => {
+      _pendingEloKeys.add(k);
+      _pendingRankStatsKeys.add(k);
+    });
+    markRankPersistDirty({ ranking: true, elo: true, stats: true, meta: true });
     await persistRankStateToSheet();
   } catch (e) {
     console.error('finishPlacementSession', e);
@@ -2356,14 +2501,20 @@ function updateLastWinnerUI() {
   const upsetBadge = lastWinnerInfo.underdogWin
     ? `<div style="margin-bottom:8px;color:var(--watched);font-size:11px;font-weight:600">Underdog win</div>`
     : '';
+  const blendTag = lastWinnerInfo.blendLabel
+    ? ` <span style="color:var(--muted);font-size:10px">(${esc(lastWinnerInfo.blendLabel)})</span>`
+    : '';
   const movedLine = lastWinnerInfo.moved
-    ? `Moved up <span class="rk">${lastWinnerInfo.movedBy}</span> spot(s) to <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`
-    : `Stayed at <span class="rk">#${lastWinnerInfo.rankAfter}</span>.`;
+    ? `Moved up <span class="rk">${lastWinnerInfo.movedBy}</span> spot(s) on Blend to <span class="rk">#${lastWinnerInfo.rankAfter}</span>.${blendTag}`
+    : `Stayed at <span class="rk">#${lastWinnerInfo.rankAfter}</span> on Blend.${blendTag}`;
   const loser = lastLoserInfo;
+  const loserBlendTag = loser && loser.blendLabel
+    ? ` <span style="color:var(--muted);font-size:10px">(${esc(loser.blendLabel)})</span>`
+    : '';
   const loserMovedLine = loser && Number.isFinite(loser.rankAfter)
     ? (loser.movedDown && loser.movedDownBy > 0)
-      ? `Moved down <span class="rk">${loser.movedDownBy}</span> spot(s) to <span class="rk">#${loser.rankAfter}</span>.`
-      : `Stayed at <span class="rk">#${loser.rankAfter}</span>.`
+      ? `Moved down <span class="rk">${loser.movedDownBy}</span> spot(s) on Blend to <span class="rk">#${loser.rankAfter}</span>.${loserBlendTag}`
+      : `Stayed at <span class="rk">#${loser.rankAfter}</span> on Blend.${loserBlendTag}`
     : '';
   const loserBlock = loser ? `
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
@@ -4678,7 +4829,7 @@ function showView(view) {
       if (placementState || (_placementKeysTouched && _placementKeysTouched.size)) {
         if (placementState) placementState = null;
         await finishPlacementSession();
-      } else if (_rankingDirty || _eloDirty || _rankStatsDirty) {
+      } else if (_rankingDirty || _eloDirty || _rankStatsDirty || _matchupCountDirty) {
         await persistRankStateToSheet();
       }
     })().catch(e => console.error('persist leaving rank', e));
