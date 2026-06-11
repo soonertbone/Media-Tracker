@@ -165,8 +165,14 @@
   /* Green (collection) */
   .act-collect { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
   .act-collect.on { background:#12a58b; color:#fff; border-color:rgba(0,0,0,0.25); }
+  .act-collect.status-dont-want { background:#0c0c0f; color:#fff; border-color:#2a2a34; }
+  .act-collect.status-cant-find { background:#e8c97e; color:#0c0c0f; border-color:#c9a84e; }
+  .act-collect.status-hide { background:#6a6a7a; color:#fff; border-color:#4a4a58; }
   .act-collect:hover { background:#323245; color:#a7a7c8; border-color:#45455e; }
   .act-collect.on:hover { background:#0f927b; color:#fff; border-color:rgba(0,0,0,0.25); }
+  .act-collect.status-dont-want:hover { background:#1a1a24; color:#fff; border-color:#3a3a48; }
+  .act-collect.status-cant-find:hover { background:#f0d48e; color:#0c0c0f; border-color:#c9a84e; }
+  .act-collect.status-hide:hover { background:#7a7a8a; color:#fff; border-color:#5a5a68; }
 
   /* Blue (lists) */
   .act-list { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
@@ -197,6 +203,20 @@
   .list-item { display:flex; align-items:center; gap:8px; padding:5px 4px; border-radius:5px; cursor:pointer; font-size:12px; transition:background .1s; }
   .list-item:hover { background:var(--surface); }
   .list-item input[type=checkbox] { accent-color:var(--accent2); cursor:pointer; width:13px; height:13px; }
+
+  /* Collection status popup (long-press) */
+  .cpop { left:50%; transform:translateX(-50%); min-width:168px; }
+  .collect-status-item {
+    display:block; width:100%; text-align:left; padding:7px 10px; margin-top:4px;
+    border-radius:6px; border:1px solid var(--border); font-size:12px; font-family:'DM Sans',sans-serif;
+    cursor:pointer; transition:background .1s, border-color .1s;
+  }
+  .collect-status-item:first-of-type { margin-top:0; }
+  .collect-status-item.status-dont-want { background:#0c0c0f; color:#fff; border-color:#2a2a34; }
+  .collect-status-item.status-cant-find { background:#e8c97e; color:#0c0c0f; border-color:#c9a84e; }
+  .collect-status-item.status-hide { background:#6a6a7a; color:#fff; border-color:#4a4a58; }
+  .collect-status-item.selected { outline:2px solid rgba(255,255,255,0.35); outline-offset:1px; }
+  .collect-status-item:hover { filter:brightness(1.08); }
 
   /* Poster picker popup */
   .ppop { left:0; right:0; bottom:auto; top:6px; width:auto; max-height:340px; overflow-y:auto; }
@@ -3358,6 +3378,7 @@ function collectionNormKey(collectionCell) {
   if (folded === 'yes') return 'yes';
   if (folded === 'dontwant' || folded === 'donotwant') return 'dont-want';
   if (folded === 'cantfind') return 'cant-find';
+  if (folded === 'hide') return 'hide';
   return ''; // unrecognized → treat like empty for status filters that need explicit phrases
 }
 
@@ -3422,17 +3443,18 @@ function applyFilters(fromFilterChange) {
 
     const collKey = collectionNormKey(i.collection);
     const col = collKey === 'yes'; // spreadsheet "Yes" for in-collection
+    if (fc === '' && collKey === 'hide') return false; // per-item Hide excluded from default view
     if (fc === 'yes' && !col) return false;
     if (fc === 'dont-want' && collKey !== 'dont-want') return false;
     if (fc === 'cant-find' && collKey !== 'cant-find') return false;
     // Not collected: still looking / undecided (exclude explicit statuses)
-    if (fc === 'no' && (col || collKey === 'dont-want' || collKey === 'cant-find')) return false;
+    if (fc === 'no' && (col || collKey === 'dont-want' || collKey === 'cant-find' || collKey === 'hide')) return false;
     if (fc === 'partial-tv') {
       if (i._type !== 'tv' || !col) return false;
-      const total = tmdbSeasonCache[i.tmdbId];
-      if (!Number.isFinite(total) || total <= 0) return false;
       const collectedCount = new Set(parseCollectedSeasons(i.seasons)).size;
-      if (collectedCount >= total) return false;
+      if (collectedCount === 0) return false;
+      const total = tmdbSeasonCache[i.tmdbId];
+      if (Number.isFinite(total) && total > 0 && collectedCount >= total) return false;
     }
     if (fc === 'null' && col) return false; // hide collected ("Yes") rows
 
@@ -3446,9 +3468,10 @@ function applyFilters(fromFilterChange) {
     if (fl==='none'      && onAny) return false;
     if (fl === 'tv-incomplete') {
       if (i._type !== 'tv' || !col) return false;
+      const collectedCount = new Set(parseCollectedSeasons(i.seasons)).size;
+      if (collectedCount === 0) return false;
       const cached = tmdbSeasonCache[i.tmdbId];
-      if (!Number.isFinite(cached) || cached <= 0) return false;
-      if (new Set(parseCollectedSeasons(i.seasons)).size >= cached) return false;
+      if (Number.isFinite(cached) && cached > 0 && collectedCount >= cached) return false;
     }
     if (fl==='tv-full') {
       if (i._type !== 'tv') return false;
@@ -3563,7 +3586,8 @@ function setupInfiniteScroll() {
 function makeCard(item) {
   const card=document.createElement('div'); card.className='card';
   const isW=item.watched.toLowerCase()==='yes';
-  const isC=item.collection.toLowerCase()==='yes';
+  const collKey = collectionNormKey(item.collection);
+  const isC = collKey === 'yes';
 
   // Poster wrap
   const pw=document.createElement('div'); pw.className='poster-wrap';
@@ -3618,8 +3642,11 @@ function makeCard(item) {
     bW.classList.add('on');
     bW.title='Log another watch';
   }
-  const bC=actBtn('act-collect'+(isC?' on':''),'⬡',isC?'In collection (click to remove)':'Add to collection');
+  const bC=actBtn('act-collect','⬡',isC?'In collection (click to remove)':'Add to collection');
+  applyCollectBtnStyle(bC, item);
   bC.onclick=()=>toggleCollect(item,bC,pw);
+  const cpop=makeCollectStatusPopup(item,bC,pw);
+  attachLongPressCollectPopup(bC, cpop);
   if (item._type === 'tv') {
     const cachedTotal = tmdbSeasonCache[item.tmdbId];
     if (cachedTotal) bC.title = tvCollectedTooltip(item, cachedTotal);
@@ -3631,10 +3658,10 @@ function makeCard(item) {
   bR.onclick=()=>openReviewModal(item,bR);
   const lpop=makeListPopup(item);
   bL.onclick=e=>{e.stopPropagation();togglePopup(lpop);};
-  acts.appendChild(bW); acts.appendChild(bC); acts.appendChild(bL); acts.appendChild(bR); acts.appendChild(lpop);
+  acts.appendChild(bW); acts.appendChild(bC); acts.appendChild(bL); acts.appendChild(bR); acts.appendChild(lpop); acts.appendChild(cpop);
   card.appendChild(acts);
 
-  document.addEventListener('click',()=>{lpop.classList.remove('vis');rpop.classList.remove('vis');});
+  document.addEventListener('click',()=>{lpop.classList.remove('vis');rpop.classList.remove('vis');cpop.classList.remove('vis');});
 
   // Async season check for all TV shows
   if (item._type==='tv') {
@@ -4080,10 +4107,7 @@ async function confirmTVCollect() {
   const seasonsStr = checked.join(', ');
   item.seasons = seasonsStr;
   item.collection = seasonsStr ? 'Yes' : '';
-  btn.classList.toggle('on', !!seasonsStr);
-  btn.title = seasonsStr
-    ? (tvCollectedTooltip(item, tmdbSeasonCache[item.tmdbId] || document.querySelectorAll('#collect-season-checkboxes .season-btn').length || 0) || 'In collection — click to update')
-    : 'Add to collection';
+  applyCollectBtnStyle(btn, item);
 
   document.getElementById('tv-collect-modal').classList.remove('vis');
   pendingTVCollect = null;
@@ -4686,6 +4710,97 @@ function updateTVWatchBtn(btn, item, totalSeasons) {
 }
 
 // ── Collect ──────────────────────────────────────────────────
+const COLLECT_STATUS_LABELS = {
+  'dont-want': "Don't want",
+  'cant-find': "Can't find",
+  'hide': 'Hide',
+};
+
+function applyCollectBtnStyle(btn, item) {
+  if (!btn) return;
+  btn.classList.remove('on', 'status-dont-want', 'status-cant-find', 'status-hide');
+  const key = collectionNormKey(item.collection);
+  if (key === 'yes') {
+    btn.classList.add('on');
+    btn.title = item._type === 'tv'
+      ? (tvCollectedTooltip(item, tmdbSeasonCache[item.tmdbId]) || 'In collection — click to update')
+      : 'In collection (click to remove)';
+  } else if (key === 'dont-want') {
+    btn.classList.add('status-dont-want');
+    btn.title = "Don't want — long-press to change";
+  } else if (key === 'cant-find') {
+    btn.classList.add('status-cant-find');
+    btn.title = "Can't find — long-press to change";
+  } else if (key === 'hide') {
+    btn.classList.add('status-hide');
+    btn.title = 'Hidden — long-press to change';
+  } else {
+    btn.title = 'Add to collection — long-press for status';
+  }
+}
+
+function makeCollectStatusPopup(item, btn, pw) {
+  const pop = document.createElement('div');
+  pop.className = 'popup cpop';
+  pop.innerHTML = '<h5>Collection status</h5>';
+  [
+    { key: 'dont-want', label: "Don't want", cls: 'status-dont-want' },
+    { key: 'cant-find', label: "Can't find", cls: 'status-cant-find' },
+    { key: 'hide', label: 'Hide', cls: 'status-hide' },
+  ].forEach(s => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'collect-status-item ' + s.cls;
+    row.textContent = s.label;
+    if (collectionNormKey(item.collection) === s.key) row.classList.add('selected');
+    row.onclick = async (e) => {
+      e.stopPropagation();
+      const same = collectionNormKey(item.collection) === s.key;
+      item.collection = same ? '' : COLLECT_STATUS_LABELS[s.key];
+      applyCollectBtnStyle(btn, item);
+      pop.classList.remove('vis');
+      openPopup = null;
+      await updateCells(item, [{ col: 'COLLECTION', val: item.collection }]);
+      applyFilters(false);
+    };
+    pop.appendChild(row);
+  });
+  pop.onclick = e => e.stopPropagation();
+  return pop;
+}
+
+function attachLongPressCollectPopup(btn, pop) {
+  if (!btn || !pop) return;
+  const LONG_PRESS_MS = 650;
+  let timer = null;
+  let fired = false;
+
+  const clear = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+
+  btn.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    fired = false;
+    clear();
+    timer = setTimeout(() => {
+      fired = true;
+      clear();
+      togglePopup(pop);
+    }, LONG_PRESS_MS);
+  });
+
+  ['pointerup', 'pointercancel', 'pointerleave', 'blur', 'contextmenu'].forEach(ev => btn.addEventListener(ev, clear));
+
+  btn.addEventListener('click', (e) => {
+    if (!fired) return;
+    e.preventDefault();
+    e.stopPropagation();
+    fired = false;
+  }, true);
+}
+
 function toggleCollect(item,btn,pw) {
   const on=btn.classList.contains('on');
   // TV: always prompt for collected seasons (no destructive clear on click)
@@ -4694,10 +4809,9 @@ function toggleCollect(item,btn,pw) {
     return;
   }
 
-  // Movies: simple toggle
+  // Movies: simple toggle (clears alternate statuses)
   item.collection=on?'':'Yes';
-  btn.classList.toggle('on',!on);
-  btn.title=on?'Add to collection':'In collection (click to remove)';
+  applyCollectBtnStyle(btn, item);
   updateCells(item,[{col:'COLLECTION',val:item.collection}]);
   // Apply formatting to the cell
   if (!on) applyFormatting(item,'COLLECTION',{backgroundColor:{red:0.839,green:0.976,blue:0.839},horizontalAlignment:'CENTER'});
@@ -5089,20 +5203,32 @@ function renderMonthly(year) {
 // ── TMDb Season Check ─────────────────────────────────────────
 const tmdbSeasonCache = {};
 let _seasonPreloadInFlight = false;
+let _seasonPreloadQueued = false;
 
 async function preloadTVSeasonCountsForCollection() {
-  if (_seasonPreloadInFlight) return;
-  const targets = allItems.filter(i =>
-    i && i._type === 'tv' &&
-    String(i.collection || '').toLowerCase() === 'yes' &&
-    i.tmdbId &&
-    tmdbSeasonCache[i.tmdbId] === undefined
-  );
-  if (!targets.length) return;
+  if (_seasonPreloadInFlight) {
+    _seasonPreloadQueued = true;
+    return;
+  }
   _seasonPreloadInFlight = true;
   try {
-    await Promise.all(targets.map(i => checkTVSeasons(i)));
-    applyFilters(false);
+    do {
+      _seasonPreloadQueued = false;
+      const targets = allItems.filter(i =>
+        i && i._type === 'tv' &&
+        collectionNormKey(i.collection) === 'yes' &&
+        i.tmdbId &&
+        tmdbSeasonCache[i.tmdbId] === undefined
+      );
+      const BATCH = 6;
+      for (let i = 0; i < targets.length; i += BATCH) {
+        await Promise.all(targets.slice(i, i + BATCH).map(t => checkTVSeasons(t)));
+      }
+    } while (_seasonPreloadQueued);
+    if (document.getElementById('f-collect')?.value === 'partial-tv' ||
+        document.getElementById('f-list')?.value === 'tv-incomplete') {
+      applyFilters(false);
+    }
   } finally {
     _seasonPreloadInFlight = false;
   }
@@ -5150,9 +5276,8 @@ async function updateSeasonBadge(item, card) {
   const btn = card.querySelector('.act-watch');
   if (btn) updateTVWatchBtn(btn, item, latest);
 
-  // Update collect button tooltip once we know season count
   const cbtn = card.querySelector('.act-collect');
-  if (cbtn) cbtn.title = tvCollectedTooltip(item, latest);
+  if (cbtn) applyCollectBtnStyle(cbtn, item);
 
   // Collection incomplete badge
   if (item.collection && item.collection.toLowerCase() === 'yes') {
