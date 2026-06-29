@@ -457,7 +457,8 @@
         </select>
         <button type="button" id="rank-undo-btn" onclick="undoLastMatchup()" style="background:rgba(232,126,126,0.08);border:1px solid rgba(232,126,126,0.35);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Undo</button>
         <button type="button" id="rank-next-btn" onclick="beginNextMatchup()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Next</button>
-        <button type="button" id="rank-reseed-btn" onclick="confirmReseedRankings()" title="Rebuild Rankings/Elo from watched movies (keeps matchup history)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Seed from watched</button>
+        <button type="button" id="rank-rebuild-btn" onclick="confirmRebuildRankingsFromMatchups()" title="Replay all Matchups rows to restore bump order (keeps history)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Rebuild from matchups</button>
+        <button type="button" id="rank-reseed-btn" onclick="confirmReseedRankings()" title="Reset Rankings to A–Z from watched movies (does not replay matchups)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Seed from watched</button>
         <button type="button" id="rank-reset-btn" onclick="confirmResetRankings()" title="Clear matchup history and re-seed from watched movies" style="background:rgba(232,126,126,0.06);border:1px solid rgba(232,126,126,0.28);color:#e87e7e;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">Reset rankings</button>
       </div>
       <div class="toolbar-gallery-chunk" id="toolbar-ranked-chunk" style="display:none">
@@ -1448,9 +1449,48 @@ function snapshotRankingEntries() {
 }
 
 /** One-time rebuild of bump order from Matchups history (after switching off Elo-sorted Rankings). */
+function entryFromRankKey(key) {
+  const { tmdbType, tmdbId } = splitRankRowKeyParts(key);
+  if (!tmdbId) return null;
+  const lib = allItems.find(i =>
+    i && i._type === (tmdbType || 'movie') && String(i.tmdbId || '').trim() === String(tmdbId)
+  );
+  if (lib) {
+    return {
+      tmdbType: lib._type === 'tv' ? 'tv' : 'movie',
+      tmdbId: cellToTmdbId(lib.tmdbId),
+      title: lib.title || '',
+      year: lib.year || '',
+    };
+  }
+  return { tmdbType: tmdbType || 'movie', tmdbId, title: '', year: '' };
+}
+
+function ensureMatchupParticipantsInRanking(rows) {
+  const keys = new Set();
+  (rows || []).forEach(r => {
+    if (!r || r[0] === undefined || r[0] === null) return;
+    const aId = cellToTmdbId(r[2]);
+    const bId = cellToTmdbId(r[4]);
+    if (aId) keys.add(`${String(r[1] || 'movie').trim() || 'movie'}:${aId}`);
+    if (bId) keys.add(`${String(r[3] || 'movie').trim() || 'movie'}:${bId}`);
+  });
+  let added = 0;
+  for (const key of keys) {
+    if (!key || key.endsWith(':') || excludedKeys.has(key) || rankingByKey.has(key)) continue;
+    const entry = entryFromRankKey(key);
+    if (!entry) continue;
+    ranking.push(entry);
+    added++;
+  }
+  if (added) rebuildRankingIndex();
+  return added;
+}
+
 async function rebuildBumpOrderFromMatchups() {
   const undone = await loadUndoneMatchupTimestamps();
   const rows = await fetchSheet('Matchups', 'Matchups!A2:G');
+  ensureMatchupParticipantsInRanking(rows);
   const initial = [...ranking];
   initial.sort((a, b) =>
     (a.title || '').localeCompare(b.title || '') ||
@@ -1481,6 +1521,60 @@ async function rebuildBumpOrderFromMatchups() {
   }
   await writeFullRankingToSheet();
   _rankingDirty = false;
+  return ordered.length;
+}
+
+/** Replay Matchups to restore bump order, Elo, and stats (history is not deleted). */
+async function rebuildRankingsFromMatchupHistory() {
+  await ensureAccessTokenFresh();
+  await ensureRankingTabs();
+  if (!allItems.length) await reloadLibraryFromSheets();
+  await loadExcludedFromSheet();
+  const n = await rebuildBumpOrderFromMatchups();
+  if (!n) throw new Error('No matchups found to replay. Rankings were reset to A–Z only.');
+  pruneExcludedFromRanking();
+  await rebuildMatchupStatsFromMatchupsSheet();
+  await rebuildEloFromMatchupsSheet();
+  ensureEloForRanking();
+  await writeEloToSheet();
+  await writeRankStatsToSheet();
+  await setRankMeta('orderSource', 'bump');
+  await setRankMeta('matchupCount', matchupCount);
+  updateRankTotalsUI();
+  updateLastWinnerUI();
+  return { matchups: n, movies: ranking.length };
+}
+
+async function confirmRebuildRankingsFromMatchups() {
+  if (!accessToken) {
+    alert('Sign in first.');
+    return;
+  }
+  if (!window.confirm(
+    'Rebuild bump rankings from your Matchups history?\n\n' +
+    'This replays every non-undone matchup to restore order. Matchups, reviews, and your library are not changed.\n\n' +
+    'Use this if rankings look wrong. Do not use "Seed from watched" for that — it resets to A–Z.'
+  )) return;
+
+  const btn = document.getElementById('rank-rebuild-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Rebuilding…'; }
+  try {
+    if (!ensureSheetId()) {
+      alert('No spreadsheet configured.');
+      return;
+    }
+    await initRankSystem();
+    const { matchups, movies } = await rebuildRankingsFromMatchupHistory();
+    _rankInited = true;
+    alert(`Rebuilt rankings from ${matchups.toLocaleString()} matchup(s) across ${movies.toLocaleString()} titles.`);
+    showView('ranked');
+    renderRankedList();
+  } catch (e) {
+    console.error('rebuildRankingsFromMatchupHistory', e);
+    alert(e.message || 'Rebuild failed.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Rebuild from matchups'; }
+  }
 }
 
 async function clearSheetValuesRange(rangeA1, label) {
@@ -1892,7 +1986,8 @@ async function confirmReseedRankings() {
     return;
   }
   if (!window.confirm(
-    'Rebuild Rankings, Elo, and RankStats from all watched movies (A–Z)?\n\nMatchup history is not cleared.'
+    'Reset Rankings to A–Z from all watched movies?\n\n' +
+    'Matchup history is kept, but order will be alphabetical until you run "Rebuild from matchups".'
   )) return;
 
   const btn = document.getElementById('rank-reseed-btn');
