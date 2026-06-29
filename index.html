@@ -450,7 +450,7 @@
           <input type="checkbox" id="rank-balance" onchange="onRankBalanceChanged()" style="cursor:pointer">
           Balance
         </label>
-        <select id="rank-balance-strength" onchange="onRankBalanceStrengthChanged()" title="Favor titles with fewer past matchups" style="padding:6px 10px;border-radius:8px">
+        <select id="rank-balance-strength" onchange="onRankBalanceStrengthChanged()" title="Favor titles with fewer matchups in each pairing pool" style="padding:6px 10px;border-radius:8px">
           <option value="mild">Mild</option>
           <option value="medium" selected>Medium</option>
           <option value="strong">Strong</option>
@@ -2035,22 +2035,33 @@ function effectiveRankRangeHalf(poolLen) {
   return Math.max(1, Number.isFinite(r) ? r : 100);
 }
 
-function matchupExposureWeight(key) {
-  const t = statsForKey(key).total;
-  const k = RANK_BALANCE_K[rankBalanceStrength] ?? RANK_BALANCE_K.medium;
-  return 1 / (t + k);
+function exposureWeightsForIndices(pool, indices) {
+  if (!indices.length) return [];
+  const totals = indices.map(i => statsForKey(rankKeyOf(pool[i])).total);
+  const maxT = Math.max(...totals);
+  if (rankBalanceStrength === 'mild') {
+    return totals.map(t => 1 / (t + RANK_BALANCE_K.mild));
+  }
+  if (rankBalanceStrength === 'medium') {
+    return totals.map(t => {
+      const deficit = maxT - t + 1;
+      return deficit * deficit;
+    });
+  }
+  // strong: steep preference for titles below the max exposure in this candidate set
+  return totals.map(t => {
+    const deficit = maxT - t + 1;
+    return deficit * deficit * deficit;
+  });
 }
 
 /** Pick one index from `indices` (into pool); uniform if balance off. */
 function pickWeightedPoolIndex(pool, indices) {
   if (!indices.length) return -1;
   if (!rankBalanceExposure) return indices[randomInt(0, indices.length - 1)];
+  const weights = exposureWeightsForIndices(pool, indices);
   let sum = 0;
-  const weights = indices.map(i => {
-    const w = matchupExposureWeight(rankKeyOf(pool[i]));
-    sum += w;
-    return w;
-  });
+  for (let j = 0; j < weights.length; j++) sum += weights[j];
   if (sum <= 0) return indices[randomInt(0, indices.length - 1)];
   let r = Math.random() * sum;
   for (let j = 0; j < indices.length; j++) {
@@ -2145,7 +2156,7 @@ async function commitMatchup({ matchup, winner, loser }) {
 
   const blendBefore = buildBlendRankIndexByKey();
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
-  applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  const bumpResult = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
   const blendAfter = buildBlendRankIndexByKey();
   const wAfter = rankingByKey.get(wKey);
 
@@ -2173,14 +2184,14 @@ async function commitMatchup({ matchup, winner, loser }) {
   schedulePersistRankState();
 
   setLastWinnerFromMatchup({
-    winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter
+    winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter, bumpResult
   });
 
   updateRankTotalsUI();
   updateLastWinnerUI();
 }
 
-function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter }) {
+function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter, bumpResult }) {
   const wBlendBefore = blendBefore.get(wKey);
   const wBlendAfter = blendAfter.get(wKey);
   const lBlendBefore = blendBefore.get(lKey);
@@ -2189,7 +2200,7 @@ function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, eloDelta, ts, ble
     ? Math.max(0, wBlendBefore - wBlendAfter) : 0;
   const movedDownBy = (Number.isFinite(lBlendBefore) && Number.isFinite(lBlendAfter))
     ? Math.max(0, lBlendAfter - lBlendBefore) : 0;
-  const underdogWin = Number.isFinite(wBlendBefore) && Number.isFinite(lBlendBefore) && wBlendBefore > lBlendBefore;
+  const underdogWin = !!(bumpResult && bumpResult.changed && bumpResult.movedBy > 0);
   const blendLabel = `${Math.round(rankBlendBumpPct)}% Bump · ${100 - Math.round(rankBlendBumpPct)}% Elo`;
   const s = statsForKey(wKey);
   const ls = statsForKey(lKey);
@@ -2294,7 +2305,7 @@ async function commitPlacementMatchup({ matchup, winner, loser }) {
   const lKey = rankKeyOf(loser);
   const blendBefore = buildBlendRankIndexByKey();
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
-  applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  const bumpResult = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
   const blendAfter = buildBlendRankIndexByKey();
   _rankingDirty = true;
   [aKey, bKey, wKey, lKey].forEach(k => _placementKeysTouched.add(k));
@@ -2303,7 +2314,7 @@ async function commitPlacementMatchup({ matchup, winner, loser }) {
   matchupCount += 1;
   const ts = new Date().toISOString();
   setLastWinnerFromMatchup({
-    winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter
+    winner, loser, wKey, lKey, eloDelta, ts, blendBefore, blendAfter, bumpResult
   });
   updateRankTotalsUI();
   updateLastWinnerUI();
