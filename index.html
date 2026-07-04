@@ -507,7 +507,6 @@
             <option value="">Any</option>
             <option value="watchlist">Watchlist</option>
             <option value="not-watchlist">Not on watchlist</option>
-            <option value="list1001">1001 List</option>
             <option value="list1001d">1001 w/Deletions</option>
             <option value="holly">Watch with Holly</option>
             <option value="none">— Not on any list —</option>
@@ -3602,11 +3601,10 @@ function applyFilters(fromFilterChange) {
     }
     if (fc === 'null' && col) return false; // hide collected ("Yes") rows
 
-    const onAny = sheetCellYes(i.watchlist) || sheetCellYes(i.list1001) ||
+    const onAny = sheetCellYes(i.watchlist) ||
                   sheetCellYes(i.list1001d) || sheetCellYes(i.holly);
     if (fl==='watchlist' && !sheetCellYes(i.watchlist)) return false;
     if (fl==='not-watchlist' && sheetCellYes(i.watchlist)) return false;
-    if (fl==='list1001'  && !sheetCellYes(i.list1001))  return false;
     if (fl==='list1001d' && !sheetCellYes(i.list1001d)) return false;
     if (fl==='holly'     && !sheetCellYes(i.holly))     return false;
     if (fl==='none'      && onAny) return false;
@@ -3795,7 +3793,7 @@ function makeCard(item) {
     const cachedTotal = tmdbSeasonCache[item.tmdbId];
     if (cachedTotal) bC.title = tvCollectedTooltip(item, cachedTotal);
   }
-  const onAnyList = ['watchlist','list1001','list1001d','holly'].some(k=>sheetCellYes(item[k]));
+  const onAnyList = ['watchlist','list1001d','holly'].some(k=>sheetCellYes(item[k]));
   const bL=actBtn('act-list'+(onAnyList?' on-list':''),'≡','Lists');
   const hasReview = !!String(item.reviews || '').trim();
   const bR=actBtn('act-review'+(hasReview?' has-review':''),'✎','Reviews');
@@ -4987,7 +4985,6 @@ function makeRatingPopup(item,display) {
 function makeListPopup(item) {
   const lists=[
     {key:'watchlist',label:'Watchlist',      col:'WATCHLIST'},
-    {key:'list1001', label:'1001 List',       col:'LIST_1001'},
     {key:'list1001d',label:'1001 w/Deletions',col:'LIST_1001_D'},
     {key:'holly',    label:'Watch with Holly',col:'HOLLY'},
   ];
@@ -5003,7 +5000,7 @@ function makeListPopup(item) {
       await updateCells(item,[{col:l.col,val:item[l.key]}]);
       if (cb.checked) applyFormatting(item, l.col, FMT_LIST_YES);
       // Update list button highlight
-      const onAny = ['watchlist','list1001','list1001d','holly'].some(k=>item[k].toLowerCase()==='yes');
+      const onAny = ['watchlist','list1001d','holly'].some(k=>item[k].toLowerCase()==='yes');
       const card  = row.closest('.card');
       if (card) {
         const lb = card.querySelector('.act-list');
@@ -5258,14 +5255,14 @@ function renderAllTimeCard() {
 }
 
 function render1001Card() {
-  const total1001   = allItems.filter(i => i._type==='movie' && i.list1001.toLowerCase()==='yes').length;
-  const watched1001 = allItems.filter(i => i._type==='movie' && i.list1001.toLowerCase()==='yes' && i.watched.toLowerCase()==='yes').length;
+  const total1001   = allItems.filter(i => i._type==='movie' && i.list1001d.toLowerCase()==='yes').length;
+  const watched1001 = allItems.filter(i => i._type==='movie' && i.list1001d.toLowerCase()==='yes' && i.watched.toLowerCase()==='yes').length;
   const pct = total1001 > 0 ? Math.round(watched1001 / total1001 * 100) : 0;
   const r = 34, circ = 2 * Math.PI * r;
   const dash = (pct / 100) * circ;
   return `
     <div class="stat-card">
-      <h3>1001 List Completion</h3>
+      <h3>1001 w/Deletions Completion</h3>
       <div class="completion-ring">
         <div class="ring-wrap">
           <svg width="80" height="80" viewBox="0 0 80 80">
