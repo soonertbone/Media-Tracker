@@ -697,6 +697,8 @@ let tokenClient, accessToken;
 const _tokenWaiters = [];
 let _sheetSaveInFlight = false;
 let allItems = [], filtered = [];
+let _pinnedGalleryKeys = null;
+let _pinnedMembershipSig = null;
 let curType  = 'all';
 let pendingWatch = null;
 let pendingReview = null;
@@ -943,6 +945,8 @@ async function loadSheetData() {
       ...shows.slice(1).filter(r => r[0]).map((r,i) => rowToItem(r, TC, 'tv',    i+2)),
     ];
     populateDropdowns();
+    _pinnedGalleryKeys = null;
+    _pinnedMembershipSig = null;
     applyFilters();
     showLoading(false);
     showView('gallery');
@@ -3556,6 +3560,26 @@ function titleSortKey(title) {
   return s.toLowerCase();
 }
 
+function itemGalleryKey(item) {
+  return `${item._sheet}:${item._row}`;
+}
+
+function filterMembershipSig() {
+  const type    = document.getElementById('tb-all')?.classList.contains('active') ? 'all' :
+                  document.getElementById('tb-movies')?.classList.contains('active') ? 'movie' : 'tv';
+  const search  = document.getElementById('f-search')?.value || '';
+  const watched = document.getElementById('f-watched')?.value || '';
+  const collect = document.getElementById('f-collect')?.value || '';
+  const list    = document.getElementById('f-list')?.value || '';
+  const y1      = document.getElementById('f-y1')?.value || '';
+  const y2      = document.getElementById('f-y2')?.value || '';
+  const r1      = document.getElementById('f-r1')?.value || '';
+  const r2      = document.getElementById('f-r2')?.value || '';
+  const country = document.getElementById('f-country')?.value || '';
+  const lang    = document.getElementById('f-lang')?.value || '';
+  return `mem|${type}|${search}|${watched}|${collect}|${list}|${y1}|${y2}|${r1}|${r2}|${country}|${lang}`;
+}
+
 function applyFilters(fromFilterChange) {
   // When a non-sort filter changes, recall the saved sort for this new combo
   if (fromFilterChange) recallSort();
@@ -3570,12 +3594,20 @@ function applyFilters(fromFilterChange) {
   const fco = document.getElementById('f-country').value;
   const fla = document.getElementById('f-lang').value;
   const srt = document.getElementById('f-sort').value;
+  const memSig = filterMembershipSig();
+
+  // Data edits (collection, lists, etc.) must not re-filter the visible gallery.
+  if (fromFilterChange === false && _pinnedMembershipSig === memSig && _pinnedGalleryKeys) {
+    updateFilterActiveBadge();
+    return;
+  }
+
   saveFilterPrefs();
   if (fl === 'tv-incomplete' || fc === 'partial-tv') {
     preloadTVSeasonCountsForCollection().catch(e => console.error('preloadTVSeasonCountsForCollection', e));
   }
 
-  filtered = allItems.filter(i => {
+  const matchesFilters = i => {
     if (curType!=='all' && i._type!==curType) return false;
     if (s && !i.title.toLowerCase().includes(s)) return false;
 
@@ -3645,7 +3677,15 @@ function applyFilters(fromFilterChange) {
     if (fco && i.country!==fco) return false;
     if (fla && i.language!==fla) return false;
     return true;
-  });
+  };
+
+  if (fromFilterChange === true || _pinnedMembershipSig !== memSig || !_pinnedGalleryKeys) {
+    filtered = allItems.filter(matchesFilters);
+    _pinnedGalleryKeys = new Set(filtered.map(itemGalleryKey));
+    _pinnedMembershipSig = memSig;
+  } else {
+    filtered = allItems.filter(i => _pinnedGalleryKeys.has(itemGalleryKey(i)));
+  }
 
   if (srt==='random') {
     for (let i=filtered.length-1;i>0;i--) {
@@ -4903,7 +4943,6 @@ function makeCollectStatusPopup(item, btn, pw) {
       pop.classList.remove('vis');
       openPopup = null;
       await updateCells(item, [{ col: 'COLLECTION', val: item.collection }]);
-      applyFilters(false);
     };
     pop.appendChild(row);
   });
@@ -5133,6 +5172,8 @@ function resetFiltersToDefaults() {
   if (g('f-country')) g('f-country').value = '';
   if (g('f-lang')) g('f-lang').value = '';
   if (g('f-sort')) g('f-sort').value = 'title-asc';
+  _pinnedGalleryKeys = null;
+  _pinnedMembershipSig = null;
   // Don't use recallSort here — it would reload a saved sort for the "empty" filter key and look like a filter is still active.
   applyFilters(false);
 }
@@ -5366,10 +5407,6 @@ async function preloadTVSeasonCountsForCollection() {
         await Promise.all(targets.slice(i, i + BATCH).map(t => checkTVSeasons(t)));
       }
     } while (_seasonPreloadQueued);
-    if (document.getElementById('f-collect')?.value === 'partial-tv' ||
-        document.getElementById('f-list')?.value === 'tv-incomplete') {
-      applyFilters(false);
-    }
   } finally {
     _seasonPreloadInFlight = false;
   }
