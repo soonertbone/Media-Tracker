@@ -2054,8 +2054,10 @@ async function commitMatchup({ matchup, winner, loser }) {
 
   const wRankBefore = rankingByKey.get(wKey);
   const lRankBefore = rankingByKey.get(lKey);
+  const posBefore = capturePositions(wKey, lKey);
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
   const bump = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  const posAfter = capturePositions(wKey, lKey);
   const wAfter = rankingByKey.get(wKey);
 
   _rankingDirty = true;
@@ -2082,14 +2084,37 @@ async function commitMatchup({ matchup, winner, loser }) {
 
   setLastWinnerFromMatchup({
     winner, loser, wKey, lKey, bump, eloDelta, ts,
-    wRankBefore, lRankBefore
+    wRankBefore, lRankBefore, posBefore, posAfter
   });
 
   updateRankTotalsUI();
   updateLastWinnerUI();
 }
 
-function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, ts, wRankBefore, lRankBefore }) {
+/** Current 0-based positions of two titles in the Elo-sorted and blended lists. */
+function capturePositions(wKey, lKey) {
+  const eloIdx = buildRankIndexByKey(getEloSortedRanking());
+  const blendIdx = buildRankIndexByKey(getBlendedSortedRanking());
+  const pick = k => ({ elo: eloIdx.get(k), blend: blendIdx.get(k) });
+  return { w: pick(wKey), l: pick(lKey) };
+}
+
+/** movedBy > 0 means moved up (toward #1). */
+function rankMoveFields(before, after) {
+  const out = { eloRankAfter: null, eloMovedBy: null, blendRankAfter: null, blendMovedBy: null };
+  if (!before || !after) return out;
+  if (Number.isFinite(before.elo) && Number.isFinite(after.elo)) {
+    out.eloRankAfter = after.elo + 1;
+    out.eloMovedBy = before.elo - after.elo;
+  }
+  if (Number.isFinite(before.blend) && Number.isFinite(after.blend)) {
+    out.blendRankAfter = after.blend + 1;
+    out.blendMovedBy = before.blend - after.blend;
+  }
+  return out;
+}
+
+function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, ts, wRankBefore, lRankBefore, posBefore, posAfter }) {
   const wAfter = rankingByKey.get(wKey);
   const lAfter = rankingByKey.get(lKey);
   const movedBy = bump.movedBy;
@@ -2110,6 +2135,8 @@ function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, t
     eloAfter: Math.round(eloForKey(wKey)),
     eloChange: Math.round(eloDelta.winnerEloAfter - eloDelta.winnerEloBefore),
     underdogWin,
+    ...rankMoveFields(posBefore && posBefore.w, posAfter && posAfter.w),
+    blendLabel: `${Math.round(rankBlendBumpPct)}% Bump \u00b7 ${100 - Math.round(rankBlendBumpPct)}% Elo`,
     ts
   };
   lastLoserInfo = {
@@ -2124,6 +2151,8 @@ function setLastWinnerFromMatchup({ winner, loser, wKey, lKey, bump, eloDelta, t
     winPct: ls.total ? (ls.wins / ls.total) : 0,
     eloAfter: Math.round(eloForKey(lKey)),
     eloChange: Math.round(eloDelta.loserEloAfter - eloDelta.loserEloBefore),
+    ...rankMoveFields(posBefore && posBefore.l, posAfter && posAfter.l),
+    blendLabel: `${Math.round(rankBlendBumpPct)}% Bump \u00b7 ${100 - Math.round(rankBlendBumpPct)}% Elo`,
     ts
   };
 }
@@ -2197,8 +2226,10 @@ async function commitPlacementMatchup({ matchup, winner, loser }) {
   const lKey = rankKeyOf(loser);
   const wRankBefore = rankingByKey.get(wKey);
   const lRankBefore = rankingByKey.get(lKey);
+  const posBefore = capturePositions(wKey, lKey);
   const eloDelta = applyEloResult({ winnerKey: wKey, loserKey: lKey });
   const bump = applyBumpResult({ winnerKey: wKey, loserKey: lKey });
+  const posAfter = capturePositions(wKey, lKey);
   _rankingDirty = true;
   [aKey, bKey, wKey, lKey].forEach(k => _placementKeysTouched.add(k));
   await appendPlacementMatchupRow({ matchup, winner });
@@ -2207,7 +2238,7 @@ async function commitPlacementMatchup({ matchup, winner, loser }) {
   const ts = new Date().toISOString();
   setLastWinnerFromMatchup({
     winner, loser, wKey, lKey, bump, eloDelta, ts,
-    wRankBefore, lRankBefore
+    wRankBefore, lRankBefore, posBefore, posAfter
   });
   updateRankTotalsUI();
   updateLastWinnerUI();
@@ -2411,6 +2442,22 @@ function updateRankTotalsUI() {
   }
 }
 
+function rankMoveLineHtml(label, movedBy, rankAfter) {
+  if (!Number.isFinite(rankAfter) || !Number.isFinite(movedBy)) return '';
+  const txt = movedBy > 0
+    ? `Moved up <span class="rk">${movedBy}</span> spot(s) to <span class="rk">#${rankAfter}</span>.`
+    : movedBy < 0
+      ? `Moved down <span class="rk">${-movedBy}</span> spot(s) to <span class="rk">#${rankAfter}</span>.`
+      : `Stayed at <span class="rk">#${rankAfter}</span>.`;
+  return `<div style="margin-top:8px"><span style="color:var(--muted)">${esc(label)}:</span> ${txt}</div>`;
+}
+
+function rankMoveLinesFor(info) {
+  if (!info) return '';
+  return rankMoveLineHtml('Elo rank', info.eloMovedBy, info.eloRankAfter) +
+    rankMoveLineHtml(`Blend rank (${info.blendLabel || ''})`, info.blendMovedBy, info.blendRankAfter);
+}
+
 function updateLastWinnerUI() {
   const el = document.getElementById('rank-last-winner');
   const panel = document.getElementById('rank-last-winner-panel');
@@ -2436,7 +2483,8 @@ function updateLastWinnerUI() {
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
       <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Loser</div>
       <div style="margin-top:6px"><span class="me">${esc(loser.title)}</span> <span style="opacity:.7">(${esc(loser.year)})</span></div>
-      ${loserMovedLine ? `<div style="margin-top:8px">${loserMovedLine}</div>` : ''}
+      ${loserMovedLine ? `<div style="margin-top:8px"><span style="color:var(--muted)">Bump rank:</span> ${loserMovedLine}</div>` : ''}
+      ${rankMoveLinesFor(loser)}
       ${Number.isFinite(loser.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${loser.eloAfter}</span> ${Number.isFinite(loser.eloChange) ? `<span style="color:var(--muted)">(${loser.eloChange >= 0 ? '+' : ''}${loser.eloChange})</span>` : ''}</div>` : ''}
       <div style="margin-top:8px">Win rate: <span class="rk">${(loser.winPct * 100).toFixed(1)}%</span></div>
       <div>Matchups: <span class="rk">${loser.total}</span> • Wins: <span class="rk">${loser.wins}</span> • Losses: <span class="rk">${Math.max(0, loser.total - loser.wins)}</span></div>
@@ -2447,7 +2495,8 @@ function updateLastWinnerUI() {
     ${upsetBadge}
     <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Winner</div>
     <div style="margin-top:6px"><span class="me">${esc(lastWinnerInfo.title)}</span> <span style="opacity:.7">(${esc(lastWinnerInfo.year)})</span></div>
-    <div style="margin-top:8px">${movedLine}</div>
+    <div style="margin-top:8px"><span style="color:var(--muted)">Bump rank:</span> ${movedLine}</div>
+    ${rankMoveLinesFor(lastWinnerInfo)}
     ${Number.isFinite(lastWinnerInfo.eloAfter) ? `<div style="margin-top:8px">Elo: <span class="rk">${lastWinnerInfo.eloAfter}</span> ${Number.isFinite(lastWinnerInfo.eloChange) ? `<span style="color:var(--muted)">(${lastWinnerInfo.eloChange >= 0 ? '+' : ''}${lastWinnerInfo.eloChange})</span>` : ''}</div>` : ''}
     <div style="margin-top:8px">Win rate: <span class="rk">${(lastWinnerInfo.winPct * 100).toFixed(1)}%</span></div>
     <div>Matchups: <span class="rk">${lastWinnerInfo.total}</span> • Wins: <span class="rk">${lastWinnerInfo.wins}</span> • Losses: <span class="rk">${Math.max(0, lastWinnerInfo.total - lastWinnerInfo.wins)}</span></div>
