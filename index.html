@@ -158,16 +158,6 @@
   .act-collect:hover { background:#323245; color:#a7a7c8; border-color:#45455e; }
   .act-collect.on:hover { background:#0f927b; color:#fff; border-color:rgba(0,0,0,0.25); }
 
-  /* Collection status: Don't Want (black) / Can't Find (yellow) */
-  .act-collect.dont-want { background:#000; color:#fff; border-color:#444; }
-  .act-collect.dont-want:hover { background:#161616; color:#fff; border-color:#555; }
-  .act-collect.cant-find { background:#f2c200; color:#1a1400; border-color:rgba(0,0,0,0.25); }
-  .act-collect.cant-find:hover { background:#d9ae00; color:#1a1400; border-color:rgba(0,0,0,0.25); }
-  .cpop { left:0; min-width:150px; }
-  .cpop-item { display:flex; align-items:center; gap:8px; width:100%; padding:6px 6px; border-radius:5px; cursor:pointer; font-size:12px; background:none; border:none; color:var(--text); font-family:'DM Sans',sans-serif; text-align:left; }
-  .cpop-item:hover { background:var(--surface); }
-  .cpop-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; border:1px solid rgba(255,255,255,.3); }
-
   /* Blue (lists) */
   .act-list { background:#2a2a3e; color:#7a7a9a; border:1px solid #3a3a52; }
   .act-list.on-list { background:#1f87e4; color:#fff; border-color:rgba(0,0,0,0.25); }
@@ -3287,11 +3277,8 @@ function applyFilters(fromFilterChange) {
     // Not collected: still looking / undecided (exclude explicit statuses)
     if (fc === 'no' && (col || collKey === 'dont-want' || collKey === 'cant-find')) return false;
     if (fc === 'partial-tv') {
-      if (i._type !== 'tv' || !col) return false;
-      const total = tmdbSeasonCache[i.tmdbId];
-      if (!Number.isFinite(total) || total <= 0) return false;
-      const collectedCount = new Set(parseCollectedSeasons(i.seasons)).size;
-      if (collectedCount >= total) return false;
+      const info = tvMissingSeasonInfo(i);
+      if (!info || !info.missing.length) return false;
     }
     if (fc === 'null' && col) return false; // hide collected ("Yes") rows
 
@@ -3304,10 +3291,8 @@ function applyFilters(fromFilterChange) {
     if (fl==='holly'     && i.holly.toLowerCase()!=='yes')     return false;
     if (fl==='none'      && onAny) return false;
     if (fl === 'tv-incomplete') {
-      if (i._type !== 'tv' || !col) return false;
-      const cached = tmdbSeasonCache[i.tmdbId];
-      if (!Number.isFinite(cached) || cached <= 0) return false;
-      if (new Set(parseCollectedSeasons(i.seasons)).size >= cached) return false;
+      const info = tvMissingSeasonInfo(i);
+      if (!info || !info.missing.length) return false;
     }
     if (fl==='tv-full') {
       if (i._type !== 'tv') return false;
@@ -3479,8 +3464,6 @@ function makeCard(item) {
   }
   const bC=actBtn('act-collect'+(isC?' on':''),'⬡',isC?'In collection (click to remove)':'Add to collection');
   bC.onclick=()=>toggleCollect(item,bC,pw);
-  const cpop=makeCollectStatusPopup(item,bC);
-  attachLongPressCollectMenu(bC,cpop);
   if (item._type === 'tv') {
     const cachedTotal = tmdbSeasonCache[item.tmdbId];
     if (cachedTotal) bC.title = tvCollectedTooltip(item, cachedTotal);
@@ -3492,11 +3475,10 @@ function makeCard(item) {
   bR.onclick=()=>openReviewModal(item,bR);
   const lpop=makeListPopup(item);
   bL.onclick=e=>{e.stopPropagation();togglePopup(lpop);};
-  acts.appendChild(bW); acts.appendChild(bC); acts.appendChild(bL); acts.appendChild(bR); acts.appendChild(lpop); acts.appendChild(cpop);
-  setCollectBtnState(bC,item);
+  acts.appendChild(bW); acts.appendChild(bC); acts.appendChild(bL); acts.appendChild(bR); acts.appendChild(lpop);
   card.appendChild(acts);
 
-  document.addEventListener('click',()=>{lpop.classList.remove('vis');rpop.classList.remove('vis');cpop.classList.remove('vis');});
+  document.addEventListener('click',()=>{lpop.classList.remove('vis');rpop.classList.remove('vis');});
 
   // Async season check for all TV shows
   if (item._type==='tv') {
@@ -3943,7 +3925,6 @@ async function confirmTVCollect() {
   item.seasons = seasonsStr;
   item.collection = seasonsStr ? 'Yes' : '';
   btn.classList.toggle('on', !!seasonsStr);
-  btn.classList.remove('dont-want','cant-find');
   btn.title = seasonsStr
     ? (tvCollectedTooltip(item, tmdbSeasonCache[item.tmdbId] || document.querySelectorAll('#collect-season-checkboxes .season-btn').length || 0) || 'In collection — click to update')
     : 'Add to collection';
@@ -4504,10 +4485,7 @@ function appendedToItem(type, title, year, rowNum) {
   };
 }
 
-function parseWatchedSeasons(str) {
-  if (!str) return [];
-  return String(str).split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
-}
+function parseWatchedSeasons(str) { return parseSeasonList(str); }
 
 function tvWatchPct(item, totalSeasons) {
   if (!totalSeasons) return 0;
@@ -4560,82 +4538,10 @@ function toggleCollect(item,btn,pw) {
   // Movies: simple toggle
   item.collection=on?'':'Yes';
   btn.classList.toggle('on',!on);
-  btn.classList.remove('dont-want','cant-find');
   btn.title=on?'Add to collection':'In collection (click to remove)';
   updateCells(item,[{col:'COLLECTION',val:item.collection}]);
   // Apply formatting to the cell
   if (!on) applyFormatting(item,'COLLECTION',{backgroundColor:{red:0.839,green:0.976,blue:0.839},horizontalAlignment:'CENTER'});
-}
-
-// ── Collection status (long-press menu) ──────────────────────
-function setCollectBtnState(btn, item) {
-  const k = collectionNormKey(item.collection);
-  btn.classList.toggle('on', k === 'yes');
-  btn.classList.toggle('dont-want', k === 'dont-want');
-  btn.classList.toggle('cant-find', k === 'cant-find');
-  if (k === 'dont-want') btn.title = "Don't want (long-press to change)";
-  else if (k === 'cant-find') btn.title = "Can't find (long-press to change)";
-}
-
-function makeCollectStatusPopup(item, btn) {
-  const pop = document.createElement('div');
-  pop.className = 'popup cpop';
-  pop.innerHTML = '<h5>Collection status</h5>';
-  const opts = [
-    { label: "Don't Want", val: "Don't Want", color: '#000' },
-    { label: "Can't Find", val: "Can't Find", color: '#f2c200' },
-    { label: 'Clear status', val: null, color: 'transparent' },
-  ];
-  opts.forEach(o => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'cpop-item';
-    b.innerHTML = `<span class="cpop-dot" style="background:${o.color}"></span>${esc(o.label)}`;
-    b.onclick = async (e) => {
-      e.stopPropagation();
-      pop.classList.remove('vis');
-      if (openPopup === pop) openPopup = null;
-      if (o.val) {
-        item.collection = o.val;
-      } else {
-        // Clearing: keep "Yes" for TV shows that still have collected seasons
-        item.collection = (item._type === 'tv' && parseCollectedSeasons(item.seasons).length) ? 'Yes' : '';
-      }
-      setCollectBtnState(btn, item);
-      if (!item.collection) btn.title = 'Add to collection';
-      try {
-        await updateCells(item, [{ col: 'COLLECTION', val: item.collection }]);
-        const bg = item.collection === 'Yes'
-          ? { red: 0.839, green: 0.976, blue: 0.839 }
-          : { red: 1, green: 1, blue: 1 };
-        await applyFormatting(item, 'COLLECTION', { backgroundColor: bg, horizontalAlignment: 'CENTER' });
-      } catch (err) { console.error('collection status', err); }
-    };
-    pop.appendChild(b);
-  });
-  pop.onclick = e => e.stopPropagation();
-  return pop;
-}
-
-function attachLongPressCollectMenu(btn, pop) {
-  const LONG_PRESS_MS = 550;
-  let timer = null, fired = false;
-  const clear = () => { if (timer) clearTimeout(timer); timer = null; };
-  btn.addEventListener('pointerdown', e => {
-    if (e.button !== undefined && e.button !== 0) return;
-    fired = false; clear();
-    timer = setTimeout(() => {
-      fired = true; clear();
-      togglePopup(pop);
-    }, LONG_PRESS_MS);
-  });
-  ['pointerup','pointercancel','pointerleave','blur'].forEach(ev => btn.addEventListener(ev, clear));
-  btn.addEventListener('contextmenu', e => { e.preventDefault(); clear(); });
-  // Suppress the normal click if the long-press fired
-  btn.addEventListener('click', e => {
-    if (!fired) return;
-    e.preventDefault(); e.stopPropagation(); fired = false;
-  }, true);
 }
 
 // ── Rating popup ─────────────────────────────────────────────
@@ -5022,58 +4928,158 @@ function renderMonthly(year) {
 }
 
 // ── TMDb Season Check ─────────────────────────────────────────
-const tmdbSeasonCache = {};
-let _seasonPreloadInFlight = false;
+const tmdbSeasonCache = {};      // tmdbId -> regular season count (successful lookups only)
+const _seasonFailedIds = new Set(); // lookups that failed this session (not cached as 0)
+const _seasonInFlight = {};
+const SEASON_CACHE_TTL = 2 * 24 * 3600 * 1000;
+let _seasonPreloadPromise = null;
+let _seasonActive = 0;
+const _seasonWaiters = [];
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function preloadTVSeasonCountsForCollection() {
-  if (_seasonPreloadInFlight) return;
-  const targets = allItems.filter(i =>
-    i && i._type === 'tv' &&
-    String(i.collection || '').toLowerCase() === 'yes' &&
-    i.tmdbId &&
-    tmdbSeasonCache[i.tmdbId] === undefined
-  );
-  if (!targets.length) return;
-  _seasonPreloadInFlight = true;
+/** Run at most 6 TMDb season lookups at once (avoids 429s that used to be cached as "0 seasons"). */
+function _seasonLimiter(fn) {
+  return new Promise((resolve, reject) => {
+    const run = async () => {
+      _seasonActive++;
+      try { resolve(await fn()); }
+      catch (e) { reject(e); }
+      finally {
+        _seasonActive--;
+        const next = _seasonWaiters.shift();
+        if (next) next();
+      }
+    };
+    if (_seasonActive < 6) run(); else _seasonWaiters.push(run);
+  });
+}
+
+function readSeasonCountFromStorage(id) {
   try {
-    await Promise.all(targets.map(i => checkTVSeasons(i)));
-    applyFilters(false);
-  } finally {
-    _seasonPreloadInFlight = false;
+    const j = JSON.parse(localStorage.getItem('mv_tv_seasons_' + id) || 'null');
+    if (j && Number.isFinite(j.n) && j.n > 0 && Date.now() - (j.at || 0) < SEASON_CACHE_TTL) return j.n;
+  } catch (e) {}
+  return null;
+}
+function writeSeasonCountToStorage(id, n) {
+  try { localStorage.setItem('mv_tv_seasons_' + id, JSON.stringify({ n, at: Date.now() })); } catch (e) {}
+}
+
+async function fetchSeasonCountFromTmdb(id) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const r = await fetch(`https://api.themoviedb.org/3/tv/${id}?api_key=${TMDB_KEY}`);
+      if (r.status === 429) { await _sleep(800 * (attempt + 1)); continue; }
+      if (!r.ok) return null;
+      const data = await r.json();
+      if (!Array.isArray(data.seasons)) return null;
+      const n = data.seasons.filter(s => s.season_number > 0).length;
+      return n > 0 ? n : null;
+    } catch (e) {
+      await _sleep(500 * (attempt + 1));
+    }
   }
+  return null;
 }
 
 async function checkTVSeasons(item) {
-  if (!item.tmdbId || item._type !== 'tv') return null;
-  if (tmdbSeasonCache[item.tmdbId] !== undefined) return tmdbSeasonCache[item.tmdbId];
-
-  try {
-    const url  = `https://api.themoviedb.org/3/tv/${item.tmdbId}?api_key=${TMDB_KEY}`;
-    const data = await fetch(url).then(r=>r.json());
-    // Filter out specials (season 0) and count only regular seasons
-    const latestSeason = (data.seasons||[]).filter(s=>s.season_number>0).length;
-    tmdbSeasonCache[item.tmdbId] = latestSeason;
-    return latestSeason;
-  } catch(e) {
-    tmdbSeasonCache[item.tmdbId] = null;
-    return null;
+  if (!item || !item.tmdbId || item._type !== 'tv') return null;
+  const id = item.tmdbId;
+  if (Number.isFinite(tmdbSeasonCache[id])) return tmdbSeasonCache[id];
+  const stored = readSeasonCountFromStorage(id);
+  if (stored) { tmdbSeasonCache[id] = stored; return stored; }
+  if (_seasonFailedIds.has(id)) return null;
+  if (!_seasonInFlight[id]) {
+    _seasonInFlight[id] = _seasonLimiter(async () => {
+      const n = await fetchSeasonCountFromTmdb(id);
+      if (n) { tmdbSeasonCache[id] = n; writeSeasonCountToStorage(id, n); }
+      else _seasonFailedIds.add(id);
+      return n;
+    }).finally(() => { delete _seasonInFlight[id]; });
   }
+  return _seasonInFlight[id];
 }
 
-function parseCollectedSeasons(seasonsStr) {
-  if (!seasonsStr) return [];
-  return String(seasonsStr).split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+/** Accepts "1, 2, 4", "S1, S2", "1-3", "Season 2" etc. */
+function parseSeasonList(str) {
+  if (str === null || str === undefined || str === '') return [];
+  const out = new Set();
+  String(str).split(/[,;]+/).forEach(raw => {
+    const tok = raw.replace(/\s+/g, '').replace(/^s(eason)?/i, '');
+    if (!tok) return;
+    const m = tok.match(/^(\d+)[-–—]s?(\d+)$/i);
+    if (m) {
+      let lo = +m[1], hi = +m[2];
+      if (lo > hi) [lo, hi] = [hi, lo];
+      if (hi - lo < 100) for (let n = lo; n <= hi; n++) out.add(n);
+      return;
+    }
+    const n = parseInt(tok, 10);
+    if (!isNaN(n)) out.add(n);
+  });
+  return [...out].filter(n => n > 0).sort((a, b) => a - b);
+}
+
+function parseCollectedSeasons(seasonsStr) { return parseSeasonList(seasonsStr); }
+
+/** A TV show counts as "in the collection" if Collection says Yes OR any seasons are listed. */
+function tvInCollection(item) {
+  if (!item || item._type !== 'tv') return false;
+  const k = collectionNormKey(item.collection);
+  if (k === 'dont-want' || k === 'cant-find') return false;
+  return k === 'yes' || parseCollectedSeasons(item.seasons).length > 0;
+}
+
+/** { total, missing:[season numbers] } or null if not collected / season count unknown. */
+function tvMissingSeasonInfo(item) {
+  if (!tvInCollection(item)) return null;
+  const total = tmdbSeasonCache[item.tmdbId];
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const have = new Set(parseCollectedSeasons(item.seasons));
+  const missing = [];
+  for (let n = 1; n <= total; n++) if (!have.has(n)) missing.push(n);
+  return { total, missing };
+}
+
+async function preloadTVSeasonCountsForCollection() {
+  if (_seasonPreloadPromise) return _seasonPreloadPromise;
+  const targets = allItems.filter(i =>
+    i && i._type === 'tv' && i.tmdbId && tvInCollection(i) &&
+    !Number.isFinite(tmdbSeasonCache[i.tmdbId]) && !_seasonFailedIds.has(i.tmdbId)
+  );
+  if (!targets.length) return;
+  _seasonPreloadPromise = (async () => {
+    try { await Promise.all(targets.map(i => checkTVSeasons(i))); }
+    finally { _seasonPreloadPromise = null; }
+    applyFilters(false);
+  })();
+  return _seasonPreloadPromise;
 }
 
 function tvCollectedTooltip(item, totalSeasons) {
   if (!item || item._type !== 'tv') return '';
   const total = parseInt(totalSeasons);
-  if (!total || total <= 0) return item.collection && item.collection.toLowerCase() === 'yes'
+  if (!total || total <= 0) return tvInCollection(item)
     ? 'In collection — click to update'
     : 'Add to collection';
-  const collected = parseCollectedSeasons(item.seasons).length;
+  const collected = new Set(parseCollectedSeasons(item.seasons)).size;
   const pct = Math.round((collected / total) * 100);
   return `${collected} out of ${total} seasons collected (${pct}%)`;
+}
+
+/** Orange lower-left badge when a collected TV show is missing seasons; removed when complete. */
+function refreshCollectionBadge(item, card) {
+  const pw = card && card.querySelector('.poster-wrap');
+  if (!pw) return;
+  const old = pw.querySelector('.season-badge');
+  const info = tvMissingSeasonInfo(item);
+  if (!info || !info.missing.length) { if (old) old.remove(); return; }
+  const badge = old || document.createElement('div');
+  badge.className = 'season-badge';
+  badge.style.cssText = 'position:absolute;bottom:6px;left:6px;background:rgba(240,140,30,.95);color:#1a0e00;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;z-index:3;backdrop-filter:blur(4px)';
+  badge.title = `Missing season${info.missing.length > 1 ? 's' : ''}: ${info.missing.join(', ')} (of ${info.total})`;
+  badge.textContent = `S${info.total - info.missing.length}/${info.total}`;
+  if (!old) pw.appendChild(badge);
 }
 
 async function updateSeasonBadge(item, card) {
@@ -5081,29 +5087,13 @@ async function updateSeasonBadge(item, card) {
   const latest = await checkTVSeasons(item);
   if (!latest) return;
 
-  // Update watch button opacity now that we know total seasons
   const btn = card.querySelector('.act-watch');
   if (btn) updateTVWatchBtn(btn, item, latest);
 
-  // Update collect button tooltip once we know season count
   const cbtn = card.querySelector('.act-collect');
   if (cbtn) cbtn.title = tvCollectedTooltip(item, latest);
 
-  // Collection incomplete badge
-  if (item.collection && item.collection.toLowerCase() === 'yes') {
-    const collected = parseCollectedSeasons(item.seasons);
-    if (collected.length < latest) {
-      const pw = card.querySelector('.poster-wrap');
-      if (pw && !pw.querySelector('.season-badge')) {
-        const badge = document.createElement('div');
-        badge.className = 'season-badge';
-        badge.style.cssText = 'position:absolute;bottom:6px;left:6px;background:rgba(232,126,126,.9);color:#fff;font-size:9px;font-weight:bold;padding:2px 6px;border-radius:4px;z-index:3;backdrop-filter:blur(4px)';
-        badge.title = `Collected: seasons ${collected.join(', ')} of ${latest}`;
-        badge.textContent = `S${collected.length}/${latest}`;
-        pw.appendChild(badge);
-      }
-    }
-  }
+  refreshCollectionBadge(item, card);
 
   // Watched incomplete badge
   const watchedSeasons = parseWatchedSeasons(item.seasonsWatched);
